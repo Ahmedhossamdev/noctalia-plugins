@@ -87,6 +87,51 @@ ColumnLayout {
 
     Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Color.mOutline }
 
+    // ---- Bar widget ----
+    RowLayout {
+      Layout.fillWidth: true
+      spacing: Style.marginM
+
+      NText {
+        text: pluginApi?.tr("settings.bar-shows") || "Bar widget shows"
+        pointSize: Style.fontSizeS
+        color: Color.mOnSurfaceVariant
+        Layout.fillWidth: true
+      }
+
+      NComboBox {
+        model: {
+          root.rev;
+          var m = [{ key: "", name: pluginApi?.tr("device.label") || "This Device" }];
+          for (var i = 0; i < root.comparisonList.length; i++) {
+            var e = root.comparisonList[i];
+            m.push({ key: e.tz, name: e.label || e.tz });
+          }
+          return m;
+        }
+        currentKey: root.cfg.barWidgetTz ?? root.defaults.barWidgetTz ?? ""
+        onSelected: key => {
+          if (pluginApi) {
+            pluginApi.pluginSettings.barWidgetTz = key;
+            pluginApi.saveSettings();
+            root.main?.refreshOffsets();
+            root.main?.bump();
+          }
+        }
+      }
+    }
+
+    NText {
+      Layout.fillWidth: true
+      visible: root.comparisonList.length === 0
+      text: pluginApi?.tr("settings.bar-shows-hint") || "Add a comparison city below to pick it here."
+      pointSize: Style.fontSizeXS
+      color: Color.mOnSurfaceVariant
+      wrapMode: Text.WordWrap
+    }
+
+    Rectangle { Layout.fillWidth: true; Layout.preferredHeight: 1; color: Color.mOutline }
+
     // ---- Display options ----
     NText {
       text: pluginApi?.tr("settings.display") || "Display"

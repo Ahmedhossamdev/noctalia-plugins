@@ -29,17 +29,38 @@ Item {
 
   property string timeText: "--:--"
   property string abbrevText: ""
+  property string cityLabel: ""
+
+  // Empty = mirror the device's own clock. Otherwise, any IANA zone the
+  // Settings page lets you pick from your comparison list.
+  readonly property string barTz: pluginApi?.pluginSettings?.barWidgetTz || ""
 
   function updateClock() {
-    var d = new Date();
-    var hh = d.getHours();
-    var mm = d.getMinutes();
-    var hhStr = hh < 10 ? "0" + hh : "" + hh;
-    var mmStr = mm < 10 ? "0" + mm : "" + mm;
-    root.timeText = hhStr + ":" + mmStr;
+    if (!root.barTz) {
+      var d = new Date();
+      var hh = d.getHours();
+      var mm = d.getMinutes();
+      root.timeText = (hh < 10 ? "0" + hh : "" + hh) + ":" + (mm < 10 ? "0" + mm : "" + mm);
+      var off = (main && main.deviceTz) ? main.offsets[main.deviceTz] : null;
+      root.abbrevText = off ? off.abbrev : "";
+      root.cityLabel = "";
+      return;
+    }
 
-    var off = (main && main.deviceTz) ? main.offsets[main.deviceTz] : null;
-    root.abbrevText = off ? off.abbrev : "";
+    if (!main) return;
+    var zoneOff = main.offsets[root.barTz];
+    if (!zoneOff) {
+      root.timeText = "--:--";
+      root.abbrevText = "";
+      root.cityLabel = main.labelForTz(root.barTz);
+      return;
+    }
+    var zd = new Date(main.nowMs + zoneOff.offsetMinutes * 60000);
+    var zh = zd.getUTCHours();
+    var zm = zd.getUTCMinutes();
+    root.timeText = (zh < 10 ? "0" + zh : "" + zh) + ":" + (zm < 10 ? "0" + zm : "" + zm);
+    root.abbrevText = zoneOff.abbrev || "";
+    root.cityLabel = main.labelForTz(root.barTz);
   }
 
   Timer {
@@ -138,7 +159,10 @@ Item {
     }
 
     onEntered: {
-      TooltipService.show(root, pluginApi?.tr("bar.tooltip") || "Timezone Hub — click to compare timezones", BarService.getTooltipDirection());
+      var text = root.cityLabel
+                 ? root.cityLabel + " — " + (pluginApi?.tr("bar.tooltip-click") || "click to compare timezones")
+                 : (pluginApi?.tr("bar.tooltip") || "Timezone Hub — click to compare timezones");
+      TooltipService.show(root, text, BarService.getTooltipDirection());
     }
 
     onExited: TooltipService.hide();

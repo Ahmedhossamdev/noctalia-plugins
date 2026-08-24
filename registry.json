@@ -4,14 +4,14 @@
     {
       "id": "timezone-hub",
       "name": "Timezone Hub",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "official": false,
       "author": "ahmedhossamdev",
       "description": "Change your device timezone and compare it against other cities on a live, scrollable hour-by-hour timeline.",
       "repository": "https://github.com/Ahmedhossamdev/noctalia-plugins",
       "license": "MIT",
       "tags": ["Bar", "Panel", "System", "Utility"],
-      "lastUpdated": "2026-08-24T07:05:45Z"
+      "lastUpdated": "2026-08-24T07:20:13Z"
     }
   ]
 }

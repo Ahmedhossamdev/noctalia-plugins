@@ -1,7 +1,7 @@
 {
   "id": "timezone-hub",
   "name": "Timezone Hub",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "minNoctaliaVersion": "3.6.0",
   "author": "ahmedhossamdev",
   "license": "MIT",
@@ -30,7 +30,8 @@
       "workHourStart": 9,
       "workHourEnd": 17,
       "highlightWorkHours": true,
-      "panelSize": 100
+      "panelSize": 100,
+      "barWidgetTz": ""
     }
   }
 }

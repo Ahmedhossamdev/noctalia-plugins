@@ -98,12 +98,27 @@ Singleton {
     return list;
   }
 
+  // Friendly label for any zone we track (device or a comparison city),
+  // falling back to a parsed city name for anything else.
+  function labelForTz(tz) {
+    if (!tz) return "";
+    if (tz === root.deviceTz) return pluginApi?.tr("device.label") || "This Device";
+    for (var i = 0; i < root.comparisonList.length; i++) {
+      if (root.comparisonList[i].tz === tz) return root.comparisonList[i].label || tz;
+    }
+    return tz.split("/").pop().replace(/_/g, " ");
+  }
+
   function zonesToRefresh() {
     var set = ({});
     if (root.deviceTz) set[root.deviceTz] = true;
     for (var i = 0; i < root.comparisonList.length; i++) {
       if (root.comparisonList[i].tz) set[root.comparisonList[i].tz] = true;
     }
+    // Keep the bar widget's chosen zone fresh even if it's not (or no longer)
+    // one of the comparison rows.
+    var barTz = root.settings.barWidgetTz;
+    if (barTz) set[barTz] = true;
     return Object.keys(set);
   }
 

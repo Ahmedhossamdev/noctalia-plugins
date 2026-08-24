@@ -3,7 +3,8 @@
     "label": "This Device"
   },
   "bar": {
-    "tooltip": "Timezone Hub — click to compare timezones"
+    "tooltip": "Timezone Hub — click to compare timezones",
+    "tooltip-click": "click to compare timezones"
   },
   "panel": {
     "title": "Timezone Hub",
@@ -33,6 +34,8 @@
   },
   "settings": {
     "device-timezone": "Device timezone",
+    "bar-shows": "Bar widget shows",
+    "bar-shows-hint": "Add a comparison city below to pick it here.",
     "display": "Display",
     "time-format": "Time format",
     "format-24h": "24-hour",
