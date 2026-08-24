@@ -79,6 +79,11 @@ Singleton {
 
     for (var i = 0; i < root.comparisonList.length; i++) {
       var entry = root.comparisonList[i];
+      // Skip (display only) a comparison entry that currently matches the
+      // device timezone, so promoting a city doesn't show it twice. The
+      // entry stays in pluginSettings untouched - if the device timezone
+      // changes again later, this row simply reappears.
+      if (entry.tz === root.deviceTz) continue;
       var off = root.offsets[entry.tz];
       list.push({
         key: entry.tz + "#" + i,
@@ -204,8 +209,8 @@ Singleton {
       root.changingDeviceTz = false;
       if (exitCode === 0) {
         root.deviceTz = setTzProcess.targetTz;
-        root.pruneComparisonTimezone(setTzProcess.targetTz);
         root.refreshOffsets();
+        root.bump();
         ToastService.showNotice(
           pluginApi?.tr("toast.title") || "Timezone Hub",
           (pluginApi?.tr("toast.device-changed") || "Device timezone set to") + " " + setTzProcess.targetTz,
@@ -235,19 +240,6 @@ Singleton {
     pluginApi.pluginSettings.timezones = list;
     pluginApi.saveSettings();
     root.refreshOffsets();
-    root.bump();
-  }
-
-  // Drop a comparison entry that now duplicates the device timezone (called
-  // right after a successful device timezone change, so promoting a city to
-  // "device" doesn't leave it behind as a redundant "same time" row).
-  function pruneComparisonTimezone(tz) {
-    if (!pluginApi) return;
-    var list = pluginApi.pluginSettings.timezones || [];
-    var next = list.filter(entry => entry.tz !== tz);
-    if (next.length === list.length) return;
-    pluginApi.pluginSettings.timezones = next;
-    pluginApi.saveSettings();
     root.bump();
   }
 
