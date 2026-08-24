@@ -1,0 +1,14 @@
+# Plugin source catalog for https://github.com/Ahmedhossamdev/noctalia-plugins
+# Each [[plugin]] entry's `id` suffix (after the "author/") must match its
+# top-level directory name.
+
+[[plugin]]
+id          = "ahmedhossamdev/timezone-hub"
+name        = "Timezone Hub"
+version     = "2.0.0"
+plugin_api  = 24
+author      = "ahmedhossamdev"
+license     = "MIT"
+icon        = "world"
+description = "Change your device timezone and compare it against other cities, with live times and an hour-offset strip for each."
+tags        = ["clock", "time", "timezone", "utility"]
