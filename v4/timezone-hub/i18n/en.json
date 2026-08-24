@@ -1,0 +1,51 @@
+{
+  "device": {
+    "label": "This Device"
+  },
+  "bar": {
+    "tooltip": "Timezone Hub — click to compare timezones",
+    "tooltip-click": "click to compare timezones"
+  },
+  "panel": {
+    "title": "Timezone Hub",
+    "subtitle": "Device timezone:",
+    "detecting": "Detecting device timezone…",
+    "add": "Add a timezone",
+    "legend": "Tap the pin icon to make a city your device timezone. Highlighted cells are business hours; the line marks now."
+  },
+  "row": {
+    "change-device": "Change device timezone",
+    "set-device": "Set as device timezone",
+    "remove": "Remove",
+    "same-time": "same time"
+  },
+  "picker": {
+    "back": "Back",
+    "title-device": "Set device timezone",
+    "title-add": "Add a timezone",
+    "search-placeholder": "Search city or region…",
+    "loading": "Loading timezone database…",
+    "empty": "No matching timezones"
+  },
+  "toast": {
+    "title": "Timezone Hub",
+    "device-changed": "Device timezone set to",
+    "device-change-failed": "Failed to change the device timezone. Authorization was denied or timedatectl is unavailable."
+  },
+  "settings": {
+    "device-timezone": "Device timezone",
+    "bar-shows": "Bar widget shows",
+    "bar-shows-hint": "Add a comparison city below to pick it here.",
+    "display": "Display",
+    "time-format": "Time format",
+    "format-24h": "24-hour",
+    "format-12h": "12-hour",
+    "hours-before": "Hours shown before now",
+    "hours-after": "Hours shown after now",
+    "highlight-work-hours": "Highlight work hours",
+    "work-hours-range": "Work hours",
+    "panel-size": "Panel size",
+    "comparison-timezones": "Comparison timezones",
+    "no-comparisons": "No comparison timezones yet — add one above."
+  }
+}
