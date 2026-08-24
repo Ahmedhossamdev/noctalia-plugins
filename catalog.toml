@@ -12,3 +12,14 @@ license     = "MIT"
 icon        = "world"
 description = "Change your device timezone and compare it against other cities, with live times and an hour-offset strip for each."
 tags        = ["clock", "time", "timezone", "utility"]
+
+[[plugin]]
+id          = "ahmedhossamdev/display-arrange"
+name        = "Display Arrange"
+version     = "1.0.0"
+plugin_api  = 24
+author      = "ahmedhossamdev"
+license     = "MIT"
+icon        = "device-desktop"
+description = "Arrange connected displays relative to each other - left, right, above, below - and keep the layout applied."
+tags        = ["display", "monitor", "niri", "system", "utility"]

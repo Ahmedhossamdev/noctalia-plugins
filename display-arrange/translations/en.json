@@ -1,0 +1,27 @@
+{
+  "panel": {
+    "title": "Display Arrange",
+    "subtitle": "Position each display relative to the primary one",
+    "refresh": "Refresh outputs",
+    "none": "No connected displays found",
+    "confirm-text": "New layout applied — reverting in {seconds}s if not confirmed",
+    "confirm-keep": "Keep",
+    "confirm-revert": "Revert now"
+  },
+  "row": {
+    "primary": "Primary",
+    "direction-hint": "Position relative to the primary display",
+    "direction-left": "Place to the left of the primary display",
+    "direction-top": "Place above the primary display",
+    "direction-bottom": "Place below the primary display",
+    "direction-right": "Place to the right of the primary display",
+    "make-primary": "Make this the primary display",
+    "make-primary-short": "Set as primary"
+  },
+  "settings": {
+    "refresh-interval": "Refresh interval (seconds)",
+    "refresh-interval-desc": "How often to poll niri for connected-output changes",
+    "auto-reapply": "Re-apply layout on hotplug",
+    "auto-reapply-desc": "Automatically re-apply the saved arrangement whenever the set of connected displays changes"
+  }
+}

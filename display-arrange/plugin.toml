@@ -1,0 +1,54 @@
+# Display Arrange — pick where each connected monitor sits relative to the
+# primary one (left/right/above/below), and keep that layout applied.
+#
+# niri only ever accepts output-position changes at runtime via
+# `niri msg output <name> position set <x> <y>` and explicitly does not
+# persist them into config.kdl (a restart or config reload forgets them).
+# This plugin doesn't touch config.kdl either — instead its service just
+# re-applies the saved layout every time it starts and whenever the set of
+# connected outputs changes, which covers normal login/hotplug persistence
+# without editing the user's niri config.
+
+id          = "ahmedhossamdev/display-arrange"
+name        = "Display Arrange"
+version     = "1.0.0"
+plugin_api  = 24
+author      = "ahmedhossamdev"
+license     = "MIT"
+icon        = "device-desktop"
+description = "Arrange connected displays relative to each other - left, right, above, below - and keep the layout applied."
+tags        = ["display", "monitor", "niri", "system", "utility"]
+dependencies = ["niri"]
+
+[[widget]]
+id    = "bar"
+entry = "bar.luau"
+
+[[panel]]
+id              = "panel"
+entry           = "panel.luau"
+width           = 460
+height          = 480
+placement       = "attached"
+position        = "auto"
+open_near_click = true
+
+[[service]]
+id    = "service"
+entry = "service.luau"
+
+[[setting]]
+key         = "refresh_interval"
+type        = "int"
+label_key   = "settings.refresh-interval"
+description_key = "settings.refresh-interval-desc"
+default     = 10
+min         = 3
+max         = 60
+
+[[setting]]
+key         = "auto_reapply"
+type        = "bool"
+label_key   = "settings.auto-reapply"
+description_key = "settings.auto-reapply-desc"
+default     = true
