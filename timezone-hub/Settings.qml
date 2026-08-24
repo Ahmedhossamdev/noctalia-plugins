@@ -25,6 +25,13 @@ ColumnLayout {
     root.showPicker = true;
   }
 
+  // Every field on this page already saves itself immediately on change.
+  // This exists purely so the shell's settings popup recognizes an "Apply"
+  // action is available - it calls this (then shows its own confirmation
+  // toast) when you click Apply. "Close" is what dismisses the popup;
+  // "Apply" intentionally does not, so you can keep tweaking things.
+  function saveSettings() {}
+
   // ---- Header ----
   RowLayout {
     Layout.fillWidth: true
