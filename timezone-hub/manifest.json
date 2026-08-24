@@ -1,0 +1,36 @@
+{
+  "id": "timezone-hub",
+  "name": "Timezone Hub",
+  "version": "1.0.0",
+  "minNoctaliaVersion": "3.6.0",
+  "author": "ahmedhossamdev",
+  "license": "MIT",
+  "repository": "https://github.com/Ahmedhossamdev/noctalia-plugins",
+  "description": "Change your device timezone and compare it against other cities on a live, scrollable hour-by-hour timeline.",
+  "tags": ["Bar", "Panel", "System", "Utility"],
+  "entryPoints": {
+    "main": "Main.qml",
+    "barWidget": "BarWidget.qml",
+    "panel": "Panel.qml",
+    "settings": "Settings.qml"
+  },
+  "dependencies": {
+    "plugins": []
+  },
+  "metadata": {
+    "defaultSettings": {
+      "timezones": [
+        { "tz": "America/New_York", "label": "New York" },
+        { "tz": "Europe/London", "label": "London" },
+        { "tz": "Asia/Tokyo", "label": "Tokyo" }
+      ],
+      "timeFormat": "24h",
+      "hoursBefore": 3,
+      "hoursAfter": 21,
+      "workHourStart": 9,
+      "workHourEnd": 17,
+      "highlightWorkHours": true,
+      "panelSize": 100
+    }
+  }
+}
