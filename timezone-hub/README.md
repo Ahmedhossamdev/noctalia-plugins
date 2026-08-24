@@ -1,25 +1,26 @@
 # Timezone Hub
 
-Change your device's timezone and see it compared against other cities on a
-live, scrollable hour-by-hour timeline — a bar clock, a full comparison
-panel, and a settings page, all in one plugin for [Noctalia Shell](https://github.com/noctalia-dev/noctalia).
+Change your device's timezone and compare it against other cities — a bar
+clock and a comparison panel, for [Noctalia Shell](https://github.com/noctalia-dev/noctalia)
+v5 (Luau plugin API).
 
 ## Features
 
-- **Bar widget** — your device's local time (with zone abbreviation), click
-  to open the panel.
-- **Timeline panel** — your device pinned as the first row, plus every city
-  you add, each rendered as a horizontal strip of hour cells:
-  - a vertical line marks the current moment, shared across every row
-  - work hours are subtly highlighted (configurable range)
-  - the first hour of a new day shows the weekday + date instead of a number
-  - each row shows the offset relative to your device ("+6h", "-9h30", …)
+- **Bar widget** — your device's local time (with zone abbreviation, or a
+  chosen comparison city's time instead), click to open the panel.
+- **Panel** — your device pinned as the first row, plus every city you add:
+  - live time, UTC offset, and delta vs your device ("+6h", "-9h30", …)
+  - a compact hour-offset strip per row (current hour highlighted, work
+    hours shaded — configurable range)
+  - drag the grip to reorder comparison cities
 - **Change your device timezone** from a searchable list of every IANA zone
   `timedatectl` knows about, or promote any comparison city to be your
   device's timezone with one click (the pin icon on its row).
-- **Settings page** mirrors the panel's controls: manage comparison cities,
-  12h/24h format, how many hours to show before/after now, and the work-hour
-  highlight range.
+- **Star a row** to pick which zone the bar widget mirrors (defaults to
+  your device).
+- Settings (Settings → Plugins → Timezone Hub): 12h/24h format, how many
+  hours to show before/after now in the strip, and the work-hour highlight
+  range.
 
 ## Requirements
 
@@ -61,17 +62,36 @@ mkdir -p ~/.config/noctalia/plugins
 cp -r timezone-hub ~/.config/noctalia/plugins/
 ```
 
-Restart Noctalia (`killall qs && qs -c noctalia-shell -d`), then in Settings
-→ Plugins → **Installed**, enable **Timezone Hub** (it's picked up
-automatically just by being in the plugins folder — no manual JSON editing
-needed) and add its widget from the Bar tab.
+Reload Noctalia's config (`noctalia msg config-reload`, or restart it), then
+in Settings → Plugins → **Installed**, enable **Timezone Hub** and add its
+widget from the Bar tab.
 
-## Notes on how the timeline is computed
+## IPC
 
-QML's JS engine doesn't reliably resolve arbitrary IANA timezones on its
-own, so — like the official World Clock plugin — this reads the UTC offset
-and abbreviation for every configured zone from `date` (`TZ=<zone> date
-+"%z|%Z"`), batched into a single process call per refresh (every 2 minutes,
-plus right after you add/change a zone). Everything else — the hour grid,
-the "now" line, day boundaries, work-hour shading — is pure arithmetic on
-top of that cached offset, so the UI stays smooth between refreshes.
+```sh
+# Open the panel
+noctalia msg panel-toggle ahmedhossamdev/timezone-hub:panel
+
+# Manage comparison cities
+noctalia msg plugin ahmedhossamdev/timezone-hub:service all add "America/Los_Angeles"
+noctalia msg plugin ahmedhossamdev/timezone-hub:service all remove "UTC"
+noctalia msg plugin ahmedhossamdev/timezone-hub:service all list
+```
+
+## Notes
+
+- Requires `plugin_api = 24` (argv-array `noctalia.runAsync()` for safe
+  `pkexec`/`timedatectl` execution, IANA-zone time formatting, and panel
+  drag & drop).
+- The hour view is a **fixed, non-scrolling strip** rather than a
+  scrollable 24-hour grid with a "now" line — Noctalia's v5 declarative
+  panel UI (`ui.*`) only supports vertical scrolling, with no canvas or
+  overlay positioning, so a horizontally-scrollable timeline isn't
+  buildable there. The strip shows a configurable window of hours around
+  now instead, with the current hour highlighted.
+- Comparison cities are stored under the plugin's data directory and
+  survive plugin updates; scalar preferences (time format, hour window,
+  work-hour range) live in the shell's own Settings → Plugins page.
+- This plugin previously targeted Noctalia's legacy v4 (QML-based) plugin
+  format. It has been rewritten against the current v5 API
+  (`plugin.toml` + Luau).
