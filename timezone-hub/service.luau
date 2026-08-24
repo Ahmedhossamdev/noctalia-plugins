@@ -213,7 +213,26 @@ local function setDeviceTimezone(tz)
   noctalia.runAsync({ "pkexec", "timedatectl", "set-timezone", tz }, function(result)
     changingDeviceTz = false
     if result.exitCode == 0 then
+      -- Swap, don't just overwrite: drop the newly-promoted zone out of the
+      -- comparison list (it's about to be the device row, not a comparison
+      -- row) and put the outgoing device zone back into the list in its
+      -- place, so switching devices never silently loses or duplicates a
+      -- zone.
+      local oldDeviceTz = deviceTz
+      local promotedIdx = indexOfComparison(tz)
+      if promotedIdx ~= nil then
+        table.remove(comparisons, promotedIdx)
+        if oldDeviceTz ~= "" then
+          table.insert(comparisons, promotedIdx, { tz = oldDeviceTz, label = shortLabel(oldDeviceTz) })
+        end
+      elseif oldDeviceTz ~= "" and indexOfComparison(oldDeviceTz) == nil then
+        table.insert(comparisons, 1, { tz = oldDeviceTz, label = shortLabel(oldDeviceTz) })
+      end
+      if barTz == tz then
+        barTz = ""
+      end
       deviceTz = tz
+      saveData()
       publish()
       noctalia.notify(noctalia.tr("toast.title"), noctalia.tr("toast.device-changed") .. " " .. tz)
     else
