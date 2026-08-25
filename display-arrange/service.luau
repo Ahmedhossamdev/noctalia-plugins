@@ -1,32 +1,39 @@
 --!nonstrict
 -- Display Arrange service — reads connected niri outputs, lets one be
 -- "primary" (always anchored at 0,0), and positions every other output
--- relative to it (left/right/top/bottom, or a manual x/y). niri forgets
--- `niri msg output ... position` changes on restart/config-reload, so this
--- service just re-applies the saved layout on load and whenever the set of
+-- relative to it (left/right/top/bottom, or a manual x/y). Also persists
+-- and re-applies mode (resolution + refresh rate) and scale per output.
+-- niri forgets these runtime changes on restart/config-reload, so this
+-- service re-applies the saved layout on load and whenever the set of
 -- connected outputs changes, instead of touching the user's config.kdl.
 --
 -- Persistence: pluginDataDir()/data.json -> { primary = "eDP-1",
---   rules = { [name] = { direction = "left"|"right"|"top"|"bottom" } } }
+--   rules = { [name] = { direction = "left"|"right"|"top"|"bottom",
+--                         mode = { width, height, refreshRate },
+--                         scale = 2.0 } } }
 -- State:
 --   display_arrange.outputs         -> { { name, make, model, width, height,
 --                                           scale, x, y, isPrimary,
---                                           direction }, ... }
+--                                           direction, modes,
+--                                           currentModeWidth,
+--                                           currentModeHeight,
+--                                           currentModeRefreshRate }, ... }
 --   display_arrange.primary         -> string
 --   display_arrange.applying        -> bool
 --   display_arrange.pending_deadline -> number (ms epoch; 0 = no pending change)
 -- Commands (display_arrange.cmd):
 --   { op = "set_primary", name = ... }
 --   { op = "set_direction", name = ..., direction = "left"|"right"|"top"|"bottom" }
+--   { op = "set_mode", name = ..., width, height, refreshRate (mHz) }
+--   { op = "set_scale", name = ..., scale = 2.0 }
 --   { op = "clear_rule", name = ... }
 --   { op = "confirm_layout" }  -- keep the pending change
 --   { op = "revert_layout" }  -- undo the pending change now, instead of waiting
 --   { op = "refresh" }
 --
--- Every set_primary/set_direction starts a 30s confirmation window
--- (display_arrange.pending_deadline, ms epoch): if it's not confirmed in
--- time, the change is undone automatically - a bad guess (e.g. a display
--- placed somewhere the mouse can't reach) can't strand the user.
+-- Every set_primary/set_direction/set_mode/set_scale starts a 30s
+-- confirmation window: if not confirmed in time, the change is undone
+-- automatically so a bad guess can't strand the user.
 
 local CONFIRM_WINDOW_MS = 30000
 
@@ -93,6 +100,22 @@ local function fetchOutputs(callback)
       if type(decoded) == "table" then
         for name, o in pairs(decoded) do
           if type(o) == "table" and type(o.logical) == "table" then
+            local modesRaw = type(o.modes) == "table" and o.modes or {}
+            local modes = {}
+            for _, m in ipairs(modesRaw) do
+              if type(m) == "table" and m.width and m.height and m.refresh_rate then
+                table.insert(modes, { width = m.width, height = m.height, refreshRate = m.refresh_rate, isPreferred = m.is_preferred == true })
+              end
+            end
+            -- Sort: lowest resolution first, then lowest refresh rate first,
+            -- so < always means "smaller" and > always means "larger".
+            table.sort(modes, function(a, b)
+              local aPixels = a.width * a.height
+              local bPixels = b.width * b.height
+              if aPixels ~= bPixels then return aPixels < bPixels end
+              return a.refreshRate < b.refreshRate
+            end)
+            local cm = type(o.current_mode) == "table" and o.current_mode or nil
             table.insert(list, {
               name = name,
               make = o.make or "",
@@ -102,6 +125,10 @@ local function fetchOutputs(callback)
               scale = o.logical.scale,
               x = o.logical.x,
               y = o.logical.y,
+              modes = modes,
+              currentModeWidth = cm and cm.width or nil,
+              currentModeHeight = cm and cm.height or nil,
+              currentModeRefreshRate = cm and cm.refresh_rate or nil,
             })
           end
         end
@@ -111,6 +138,28 @@ local function fetchOutputs(callback)
       return a.name < b.name
     end)
     callback(list)
+  end)
+end
+
+local function setMode(name, width, height, refreshRateMhz)
+  local hz = math.floor(refreshRateMhz / 1000 + 0.5)
+  noctalia.runAsync({
+    "niri", "msg", "output", name, "mode",
+    string.format("%dx%d@%d", width, height, hz),
+  }, function(result)
+    if result.exitCode ~= 0 then
+      noctalia.log("DisplayArrange: failed to set mode for " .. name .. ": " .. (result.stderr or ""))
+    end
+  end)
+end
+
+local function setScale(name, scale)
+  noctalia.runAsync({
+    "niri", "msg", "output", name, "scale", tostring(scale),
+  }, function(result)
+    if result.exitCode ~= 0 then
+      noctalia.log("DisplayArrange: failed to set scale for " .. name .. ": " .. (result.stderr or ""))
+    end
   end)
 end
 
@@ -180,6 +229,19 @@ local function applyLayout()
   applying = true
   fetchOutputs(function(list)
     ensureDefaultPrimary(list)
+    -- Apply mode and scale for every output (including primary).
+    for _, entry in ipairs(list) do
+      local rule = rules[entry.name]
+      if rule ~= nil then
+        if rule.mode ~= nil then
+          setMode(entry.name, rule.mode.width, rule.mode.height, rule.mode.refreshRate)
+        end
+        if rule.scale ~= nil then
+          setScale(entry.name, rule.scale)
+        end
+      end
+    end
+    -- Apply positions: primary at origin, others per their direction rule.
     local primaryOut = primary ~= nil and findOutput(list, primary) or nil
     if primaryOut ~= nil then
       setPosition(primaryOut.name, 0, 0)
@@ -188,7 +250,7 @@ local function applyLayout()
       for _, entry in ipairs(list) do
         if entry.name ~= primary then
           local rule = rules[entry.name]
-          if rule ~= nil then
+          if rule ~= nil and rule.direction ~= nil then
             local x, y = targetFor(entry, primaryOut, rule)
             setPosition(entry.name, x, y)
             entry.x = x
@@ -246,17 +308,28 @@ function publish(list)
   for _, o in ipairs(list) do
     connectedKey = connectedKey .. o.name .. ";"
     local rule = rules[o.name]
+    -- Use rule values as optimistic overrides so the panel reflects a
+    -- just-applied change immediately, before niri confirms it on the
+    -- next fetch (setMode/setScale are async and return before niri acts).
+    local displayScale = (rule and rule.scale) or o.scale
+    local displayModeW = (rule and rule.mode and rule.mode.width)       or o.currentModeWidth
+    local displayModeH = (rule and rule.mode and rule.mode.height)      or o.currentModeHeight
+    local displayModeHz = (rule and rule.mode and rule.mode.refreshRate) or o.currentModeRefreshRate
     table.insert(outRows, {
       name = o.name,
       make = o.make,
       model = o.model,
       width = o.width,
       height = o.height,
-      scale = o.scale,
+      scale = displayScale,
       x = o.x,
       y = o.y,
       isPrimary = o.name == primary,
       direction = rule and rule.direction or "",
+      modes = o.modes or {},
+      currentModeWidth = displayModeW,
+      currentModeHeight = displayModeH,
+      currentModeRefreshRate = displayModeHz,
     })
   end
   lastConnectedKey = connectedKey
@@ -283,14 +356,35 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
   if op == "set_primary" and type(cmd.name) == "string" then
     if cmd.name ~= primary then
       armConfirm()
-      rules[cmd.name] = nil -- the new primary can't also carry a direction rule
+      -- The new primary has no direction, but keep any mode/scale rules for it.
+      local existing = rules[cmd.name] or {}
+      if existing.mode ~= nil or existing.scale ~= nil then
+        rules[cmd.name] = { mode = existing.mode, scale = existing.scale }
+      else
+        rules[cmd.name] = nil
+      end
       primary = cmd.name
       saveData()
       applyLayout()
     end
   elseif op == "set_direction" and type(cmd.name) == "string" and type(cmd.direction) == "string" then
     armConfirm()
-    rules[cmd.name] = { direction = cmd.direction }
+    -- Preserve any existing mode/scale when updating direction.
+    local existing = rules[cmd.name] or {}
+    rules[cmd.name] = { direction = cmd.direction, mode = existing.mode, scale = existing.scale }
+    saveData()
+    applyLayout()
+  elseif op == "set_mode" and type(cmd.name) == "string" and type(cmd.width) == "number" then
+    armConfirm()
+    local existing = rules[cmd.name] or {}
+    rules[cmd.name] = { direction = existing.direction, scale = existing.scale,
+      mode = { width = cmd.width, height = cmd.height, refreshRate = cmd.refreshRate } }
+    saveData()
+    applyLayout()
+  elseif op == "set_scale" and type(cmd.name) == "string" and type(cmd.scale) == "number" then
+    armConfirm()
+    local existing = rules[cmd.name] or {}
+    rules[cmd.name] = { direction = existing.direction, mode = existing.mode, scale = cmd.scale }
     saveData()
     applyLayout()
   elseif op == "clear_rule" and type(cmd.name) == "string" then
