@@ -17,6 +17,9 @@ Then go to **Available**, install a plugin, and enable it from **Installed**.
 
 - [timezone-hub](./timezone-hub) — change your device timezone and compare
   it against other cities, with live times and a per-city hour-offset strip.
+- [display-arrange](./display-arrange) — position each connected display
+  relative to your primary (left / right / above / below) with live IPC
+  control; layout is re-applied automatically on hotplug and startup.
 
 ## Structure
 
