@@ -7,6 +7,14 @@
 local outputs = {}
 local primary = ""
 local pendingSeconds = 0 -- countdown pushed live by the service; 0 = nothing pending
+local displayMode = "extend"
+
+local MODE_OPTIONS = {
+  { id = "primary-only", glyph = "device-laptop",  labelKey = "mode.primary-only", descKey = "mode.primary-only-desc" },
+  { id = "duplicate",    glyph = "copy",            labelKey = "mode.duplicate",    descKey = "mode.duplicate-unavailable-desc", unavailable = true },
+  { id = "extend",       glyph = "columns",         labelKey = "mode.extend",       descKey = "mode.extend-desc" },
+  { id = "second-only",  glyph = "device-desktop",  labelKey = "mode.second-only",  descKey = "mode.second-only-desc" },
+}
 
 -- Scale presets: 0.5× … 3× matching common HiDPI steps.
 local SCALE_PRESETS = { 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0 }
@@ -337,6 +345,48 @@ local function outputCard(row)
 end
 
 -- ---------------------------------------------------------------------
+-- Display mode bar (Windows-style: PC only / Duplicate / Extend / 2nd only)
+-- ---------------------------------------------------------------------
+local function displayModeBar()
+  local row1 = {}
+  local row2 = {}
+  for i, opt in ipairs(MODE_OPTIONS) do
+    local isSelected = displayMode == opt.id
+    local btn = ui.button({
+      key = "mode-" .. opt.id,
+      glyph = opt.glyph,
+      text = noctalia.tr(opt.labelKey),
+      variant = isSelected and "outline" or "ghost",
+      selected = isSelected,
+      enabled = not opt.unavailable,
+      controlSize = "sm",
+      flexGrow = 1,
+      tooltip = noctalia.tr(opt.descKey),
+      onClick = function()
+        noctalia.state.set("display_arrange.cmd", { op = "set_display_mode", mode = opt.id })
+      end,
+    })
+    if i <= 2 then
+      table.insert(row1, btn)
+    else
+      table.insert(row2, btn)
+    end
+  end
+  return ui.column({ gap = 4, justify = "start" }, {
+    ui.label({ text = noctalia.tr("mode.section"), fontSize = 9, color = "on_surface_variant" }),
+    ui.column({
+      gap = 2,
+      fill = "on_surface/0.05",
+      radius = 8,
+      padding = 4,
+    }, {
+      ui.row({ gap = 4, align = "center" }, row1),
+      ui.row({ gap = 4, align = "center" }, row2),
+    }),
+  })
+end
+
+-- ---------------------------------------------------------------------
 -- Confirm banner
 -- ---------------------------------------------------------------------
 local function confirmBanner()
@@ -414,6 +464,11 @@ local function view()
     table.insert(body, banner)
   end
 
+  if #outputs > 0 then
+    table.insert(body, displayModeBar())
+    table.insert(body, ui.separator({}))
+  end
+
   if #outputs == 0 then
     table.insert(body, ui.label({ text = noctalia.tr("panel.none"), fontSize = 11, color = "on_surface_variant" }))
   else
@@ -456,6 +511,11 @@ end)
 
 noctalia.state.watch("display_arrange.pending_seconds", function(value)
   pendingSeconds = type(value) == "number" and value or 0
+  render()
+end)
+
+noctalia.state.watch("display_arrange.mode", function(value)
+  displayMode = type(value) == "string" and value or "extend"
   render()
 end)
 

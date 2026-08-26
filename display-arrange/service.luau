@@ -42,9 +42,10 @@ noctalia.setUpdateInterval(userIntervalMs)
 
 local primary = nil
 local rules = {} -- [name] = { direction = "left"|"right"|"top"|"bottom" }
+local displayMode = "extend" -- "extend"|"duplicate"|"primary-only"|"second-only"
 local applying = false
 local lastConnectedKey = ""
-local pendingConfirm = nil -- { deadlineMs, prevPrimary, prevRules }
+local pendingConfirm = nil -- { deadlineMs, prevPrimary, prevRules, prevMode }
 
 -- ---------------------------------------------------------------------
 -- Persistence
@@ -62,7 +63,7 @@ local function saveData()
   if path == nil then
     return
   end
-  local encoded = noctalia.json.encode({ primary = primary, rules = rules })
+  local encoded = noctalia.json.encode({ primary = primary, rules = rules, displayMode = displayMode })
   if encoded ~= nil then
     noctalia.writeFile(path, encoded)
   end
@@ -87,6 +88,9 @@ local function loadData()
   if type(decoded.rules) == "table" then
     rules = decoded.rules
   end
+  if type(decoded.displayMode) == "string" then
+    displayMode = decoded.displayMode
+  end
 end
 
 -- ---------------------------------------------------------------------
@@ -99,7 +103,10 @@ local function fetchOutputs(callback)
       local decoded = noctalia.json.decode(result.stdout)
       if type(decoded) == "table" then
         for name, o in pairs(decoded) do
-          if type(o) == "table" and type(o.logical) == "table" then
+          if type(o) == "table" then
+            -- Include disabled outputs (logical == null) so we can re-enable them later.
+            local enabled = type(o.logical) == "table"
+            local log = enabled and o.logical or {}
             local modesRaw = type(o.modes) == "table" and o.modes or {}
             local modes = {}
             for _, m in ipairs(modesRaw) do
@@ -107,8 +114,7 @@ local function fetchOutputs(callback)
                 table.insert(modes, { width = m.width, height = m.height, refreshRate = m.refresh_rate, isPreferred = m.is_preferred == true })
               end
             end
-            -- Sort: lowest resolution first, then lowest refresh rate first,
-            -- so < always means "smaller" and > always means "larger".
+            -- Sort: lowest resolution first, then lowest refresh rate first.
             table.sort(modes, function(a, b)
               local aPixels = a.width * a.height
               local bPixels = b.width * b.height
@@ -120,11 +126,12 @@ local function fetchOutputs(callback)
               name = name,
               make = o.make or "",
               model = o.model or "",
-              width = o.logical.width,
-              height = o.logical.height,
-              scale = o.logical.scale,
-              x = o.logical.x,
-              y = o.logical.y,
+              enabled = enabled,
+              width = log.width or 0,
+              height = log.height or 0,
+              scale = log.scale or 1,
+              x = log.x or 0,
+              y = log.y or 0,
               modes = modes,
               currentModeWidth = cm and cm.width or nil,
               currentModeHeight = cm and cm.height or nil,
@@ -138,6 +145,16 @@ local function fetchOutputs(callback)
       return a.name < b.name
     end)
     callback(list)
+  end)
+end
+
+local function setOutputEnabled(name, enabled)
+  noctalia.runAsync({
+    "niri", "msg", "output", name, enabled and "on" or "off",
+  }, function(result)
+    if result.exitCode ~= 0 then
+      noctalia.log("DisplayArrange: failed to set output " .. name .. " " .. (enabled and "on" or "off") .. ": " .. (result.stderr or ""))
+    end
   end)
 end
 
@@ -194,12 +211,18 @@ local function ensureDefaultPrimary(list)
   if primary ~= nil and findOutput(list, primary) ~= nil then
     return
   end
-  -- Prefer whatever niri already anchored at the origin; else alphabetically first.
+  -- Prefer whatever niri already anchored at the origin among enabled outputs;
+  -- fall back to any enabled output, then any output alphabetically.
   local pick = nil
   for _, o in ipairs(list) do
-    if o.x == 0 and o.y == 0 then
+    if o.enabled and o.x == 0 and o.y == 0 then
       pick = o.name
       break
+    end
+  end
+  if pick == nil then
+    for _, o in ipairs(list) do
+      if o.enabled then pick = o.name; break end
     end
   end
   if pick == nil and list[1] ~= nil then
@@ -225,40 +248,81 @@ local function targetFor(entry, primaryOut, rule)
   return entry.x, entry.y
 end
 
+local function applyModeAndScale(entry)
+  local rule = rules[entry.name]
+  if rule ~= nil then
+    if rule.mode ~= nil then
+      setMode(entry.name, rule.mode.width, rule.mode.height, rule.mode.refreshRate)
+    end
+    if rule.scale ~= nil then
+      setScale(entry.name, rule.scale)
+    end
+  end
+end
+
 local function applyLayout()
   applying = true
   fetchOutputs(function(list)
     ensureDefaultPrimary(list)
-    -- Apply mode and scale for every output (including primary).
-    for _, entry in ipairs(list) do
-      local rule = rules[entry.name]
-      if rule ~= nil then
-        if rule.mode ~= nil then
-          setMode(entry.name, rule.mode.width, rule.mode.height, rule.mode.refreshRate)
-        end
-        if rule.scale ~= nil then
-          setScale(entry.name, rule.scale)
+
+    if displayMode == "primary-only" then
+      -- Keep only the primary on; disable everything else.
+      for _, entry in ipairs(list) do
+        if entry.name == primary then
+          setOutputEnabled(entry.name, true)
+          applyModeAndScale(entry)
+          setPosition(entry.name, 0, 0)
+          entry.x = 0; entry.y = 0
+        else
+          setOutputEnabled(entry.name, false)
+          entry.enabled = false
         end
       end
-    end
-    -- Apply positions: primary at origin, others per their direction rule.
-    local primaryOut = primary ~= nil and findOutput(list, primary) or nil
-    if primaryOut ~= nil then
-      setPosition(primaryOut.name, 0, 0)
-      primaryOut.x = 0
-      primaryOut.y = 0
+
+    elseif displayMode == "second-only" then
+      -- Disable the primary; bring the first non-primary to the origin.
+      local placedFirst = false
       for _, entry in ipairs(list) do
-        if entry.name ~= primary then
-          local rule = rules[entry.name]
-          if rule ~= nil and rule.direction ~= nil then
-            local x, y = targetFor(entry, primaryOut, rule)
-            setPosition(entry.name, x, y)
-            entry.x = x
-            entry.y = y
+        if entry.name == primary then
+          setOutputEnabled(entry.name, false)
+          entry.enabled = false
+        else
+          setOutputEnabled(entry.name, true)
+          applyModeAndScale(entry)
+          if not placedFirst then
+            setPosition(entry.name, 0, 0)
+            entry.x = 0; entry.y = 0
+            placedFirst = true
+          end
+        end
+      end
+
+    else -- "extend" (default)
+      -- Enable everything and arrange per direction rules.
+      for _, entry in ipairs(list) do
+        setOutputEnabled(entry.name, true)
+        applyModeAndScale(entry)
+      end
+      local primaryOut = primary ~= nil and findOutput(list, primary) or nil
+      if primaryOut ~= nil then
+        setPosition(primaryOut.name, 0, 0)
+        primaryOut.x = 0; primaryOut.y = 0
+        for _, entry in ipairs(list) do
+          -- Skip outputs that were disabled before this apply; their geometry
+          -- is 0×0 until niri confirms the re-enable. The next update() tick
+          -- will reposition them correctly once they have valid dimensions.
+          if entry.name ~= primary and entry.enabled then
+            local rule = rules[entry.name]
+            if rule ~= nil and rule.direction ~= nil then
+              local x, y = targetFor(entry, primaryOut, rule)
+              setPosition(entry.name, x, y)
+              entry.x = x; entry.y = y
+            end
           end
         end
       end
     end
+
     applying = false
     publish(list)
   end)
@@ -279,7 +343,7 @@ end
 -- and switches to a 1s tick so the countdown/auto-revert are responsive
 -- regardless of the configured (usually much slower) refresh interval.
 local function armConfirm()
-  pendingConfirm = { deadlineMs = noctalia.nowMs() + CONFIRM_WINDOW_MS, prevPrimary = primary, prevRules = copyRules() }
+  pendingConfirm = { deadlineMs = noctalia.nowMs() + CONFIRM_WINDOW_MS, prevPrimary = primary, prevRules = copyRules(), prevMode = displayMode }
   noctalia.setUpdateInterval(1000)
 end
 
@@ -294,6 +358,7 @@ local function revertPending()
   end
   primary = pendingConfirm.prevPrimary
   rules = pendingConfirm.prevRules
+  displayMode = pendingConfirm.prevMode
   clearConfirm()
   saveData()
   applyLayout()
@@ -306,38 +371,42 @@ function publish(list)
   local connectedKey = ""
   local outRows = {}
   for _, o in ipairs(list) do
+    -- connectedKey tracks ALL physically connected outputs (for hotplug
+    -- detection), regardless of whether we've enabled or disabled them.
     connectedKey = connectedKey .. o.name .. ";"
-    local rule = rules[o.name]
-    -- Use rule values as optimistic overrides so the panel reflects a
-    -- just-applied change immediately, before niri confirms it on the
-    -- next fetch (setMode/setScale are async and return before niri acts).
-    local displayScale = (rule and rule.scale) or o.scale
-    local displayModeW = (rule and rule.mode and rule.mode.width)       or o.currentModeWidth
-    local displayModeH = (rule and rule.mode and rule.mode.height)      or o.currentModeHeight
-    local displayModeHz = (rule and rule.mode and rule.mode.refreshRate) or o.currentModeRefreshRate
-    table.insert(outRows, {
-      name = o.name,
-      make = o.make,
-      model = o.model,
-      width = o.width,
-      height = o.height,
-      scale = displayScale,
-      x = o.x,
-      y = o.y,
-      isPrimary = o.name == primary,
-      direction = rule and rule.direction or "",
-      modes = o.modes or {},
-      currentModeWidth = displayModeW,
-      currentModeHeight = displayModeH,
-      currentModeRefreshRate = displayModeHz,
-    })
+    -- Only send enabled outputs to the panel; disabled ones have no
+    -- meaningful geometry to show and would confuse the UI.
+    if o.enabled then
+      local rule = rules[o.name]
+      -- Use rule values as optimistic overrides so the panel reflects a
+      -- just-applied change before niri confirms it on the next fetch.
+      local displayScale = (rule and rule.scale) or o.scale
+      local displayModeW  = (rule and rule.mode and rule.mode.width)        or o.currentModeWidth
+      local displayModeH  = (rule and rule.mode and rule.mode.height)       or o.currentModeHeight
+      local displayModeHz = (rule and rule.mode and rule.mode.refreshRate)  or o.currentModeRefreshRate
+      table.insert(outRows, {
+        name = o.name,
+        make = o.make,
+        model = o.model,
+        width = o.width,
+        height = o.height,
+        scale = displayScale,
+        x = o.x,
+        y = o.y,
+        isPrimary = o.name == primary,
+        direction = rule and rule.direction or "",
+        modes = o.modes or {},
+        currentModeWidth = displayModeW,
+        currentModeHeight = displayModeH,
+        currentModeRefreshRate = displayModeHz,
+      })
+    end
   end
   lastConnectedKey = connectedKey
   noctalia.state.set("display_arrange.outputs", outRows)
   noctalia.state.set("display_arrange.primary", primary or "")
+  noctalia.state.set("display_arrange.mode", displayMode)
   noctalia.state.set("display_arrange.applying", applying)
-  -- Pushed as a live countdown (not a raw deadline) so the panel just
-  -- renders the number it's given each tick, with no clock of its own.
   local pendingSeconds = 0
   if pendingConfirm ~= nil then
     pendingSeconds = math.max(0, math.ceil((pendingConfirm.deadlineMs - noctalia.nowMs()) / 1000))
@@ -387,6 +456,14 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
     rules[cmd.name] = { direction = existing.direction, mode = existing.mode, scale = cmd.scale }
     saveData()
     applyLayout()
+  elseif op == "set_display_mode" and type(cmd.mode) == "string" then
+    local validModes = { extend = true, ["primary-only"] = true, ["second-only"] = true }
+    if validModes[cmd.mode] and cmd.mode ~= displayMode then
+      armConfirm()
+      displayMode = cmd.mode
+      saveData()
+      applyLayout()
+    end
   elseif op == "clear_rule" and type(cmd.name) == "string" then
     rules[cmd.name] = nil
     saveData()
