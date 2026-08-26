@@ -21,6 +21,18 @@
     "make-primary": "Make this the primary display",
     "make-primary-short": "Set as primary"
   },
+  "mode": {
+    "section": "Display mode",
+    "extend": "Extend",
+    "duplicate": "Duplicate",
+    "primary-only": "PC screen only",
+    "second-only": "Second screen only",
+    "extend-desc": "Extend the desktop across all displays",
+    "duplicate-desc": "Show the same image on all displays",
+    "duplicate-unavailable-desc": "Mirroring is not supported at runtime — niri only allows this via config.kdl",
+    "primary-only-desc": "Use only the primary (PC) display",
+    "second-only-desc": "Use only the secondary display(s)"
+  },
   "settings": {
     "refresh-interval": "Refresh interval (seconds)",
     "refresh-interval-desc": "How often to poll niri for connected-output changes",
