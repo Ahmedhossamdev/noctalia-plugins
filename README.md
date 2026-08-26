@@ -20,6 +20,9 @@ Then go to **Available**, install a plugin, and enable it from **Installed**.
 - [display-arrange](./display-arrange) — position each connected display
   relative to your primary (left / right / above / below) with live IPC
   control; layout is re-applied automatically on hotplug and startup.
+- [sticky-notes](./sticky-notes) — colourful sticky notes from your bar,
+  with per-note color selection, pin & drag-to-arrange, a privacy blur
+  mode, and Markdown/plain-text/JSON persistence.
 
 ## Structure
 

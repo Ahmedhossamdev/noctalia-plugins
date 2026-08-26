@@ -14,6 +14,17 @@ description = "Change your device timezone and compare it against other cities, 
 tags        = ["clock", "time", "timezone", "utility"]
 
 [[plugin]]
+id          = "ahmedhossamdev/sticky-notes"
+name        = "Sticky Notes"
+version     = "1.0.0"
+plugin_api  = 24
+author      = "ahmedhossamdev"
+license     = "MIT"
+icon        = "note"
+description = "Create and manage colorful sticky notes from your bar. Supports multiple notes, per-note color selection, and a privacy blur mode."
+tags        = ["notes", "productivity", "utility"]
+
+[[plugin]]
 id          = "ahmedhossamdev/display-arrange"
 name        = "Display Arrange"
 version     = "1.0.0"
