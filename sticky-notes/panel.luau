@@ -20,6 +20,7 @@ local notes = {}
 local blurred = false
 local notesReady = false
 local editingId = nil
+local editingContent = nil
 local pendingDeleteId = nil
 local editKey = 0
 -- -1 so the first state-watch fire (initial load) does not trigger auto-open.
@@ -100,21 +101,31 @@ local function sendCmd(cmd)
   noctalia.state.set("sticky_notes.cmd", cmd)
 end
 
--- Auto-delete empty note and return to list (or just return to list).
+-- Persist the local input draft without forcing a render. This is shared by
+-- Done/Back and onClose, so closing the panel cannot lose a long-note edit.
+local function saveEditingDraft()
+  local note = editingId ~= nil and findNote(editingId) or nil
+  local id = editingId
+  local content = editingContent or (note and note.content) or ""
+  editingId = nil
+  editingContent = nil
+  pendingDeleteId = nil
+
+  if note == nil then return false end
+  if noctalia.string.trim(content) == "" then
+    sendCmd({ op = "remove", id = id })
+    return true
+  elseif note.content ~= content then
+    sendCmd({ op = "update", id = id, content = content })
+    return true
+  end
+  return false
+end
+
+-- Auto-delete an empty note and return to the list (or just return to list).
 -- Called from both the Back button and the Done button.
 local function leaveEdit()
-  local note = editingId ~= nil and findNote(editingId) or nil
-  if note ~= nil and noctalia.string.trim(note.content or "") == "" then
-    local id = editingId
-    editingId = nil
-    pendingDeleteId = nil
-    sendCmd({ op = "remove", id = id })
-    -- The notes-watcher will call render() once the delete is processed.
-  else
-    editingId = nil
-    pendingDeleteId = nil
-    render()
-  end
+  if not saveEditingDraft() then render() end
 end
 
 -- -------------------------------------------------------------------------
@@ -265,7 +276,8 @@ local function notePreviewCard(note)
   return ui.column({
     key = "card-" .. note.id, fill = hex, radius = 8, padding = 10, gap = 6,
     onClick = not blurred and function()
-      editingId = note.id; pendingDeleteId = nil; editKey += 1; render()
+      editingId = note.id; editingContent = note.content or ""
+      pendingDeleteId = nil; editKey += 1; render()
     end or nil,
   }, {
     body,
@@ -309,7 +321,8 @@ local function notePreviewCard(note)
           glyph = "pencil", variant = "outline", controlSize = "sm",
           enabled = not blurred, tooltip = noctalia.tr("panel.edit"),
           onClick = function()
-            editingId = note.id; pendingDeleteId = nil; editKey += 1; render()
+            editingId = note.id; editingContent = note.content or ""
+            pendingDeleteId = nil; editKey += 1; render()
           end,
         }),
         ui.button({
@@ -392,7 +405,7 @@ local function editView(note)
     ui.separator({}),
     ui.input({
       key           = "inp-" .. note.id .. "-" .. tostring(editKey),
-      value         = note.content,
+      value         = editingContent or note.content,
       placeholder   = noctalia.tr("panel.placeholder"),
       multiline     = true,
       flexGrow      = 1,
@@ -403,7 +416,9 @@ local function editView(note)
       submitOnEnter = true,
       onSubmit      = "onEditSubmit",
       onChange      = function(value)
-        sendCmd({ op = "update", id = note.id, content = value })
+        -- ui.input owns its current text. Keeping the draft local avoids a
+        -- full panel re-render after every keystroke, which preserves scroll.
+        editingContent = value
       end,
       focus         = true,
     }),
@@ -418,7 +433,7 @@ local function editView(note)
         glyph = "check", text = noctalia.tr("panel.delete-yes"),
         variant = "destructive", controlSize = "sm",
         onClick = function()
-          local id = note.id; pendingDeleteId = nil; editingId = nil
+          local id = note.id; pendingDeleteId = nil; editingId = nil; editingContent = nil
           sendCmd({ op = "remove", id = id })
         end,
       }),
@@ -454,7 +469,7 @@ function render()
   local editNote = editingId ~= nil and findNote(editingId) or nil
   -- If the note we were editing was deleted, fall back to list.
   if editingId ~= nil and editNote == nil then
-    editingId = nil; pendingDeleteId = nil
+    editingId = nil; editingContent = nil; pendingDeleteId = nil
   end
   local inEdit = editNote ~= nil
 
@@ -486,7 +501,8 @@ function render()
           -- creating another one (prevents unlimited empty-note pile-up).
           for _, n in ipairs(notes) do
             if noctalia.string.trim(n.content or "") == "" then
-              editingId = n.id; pendingDeleteId = nil; editKey += 1; render()
+              editingId = n.id; editingContent = n.content or ""
+              pendingDeleteId = nil; editKey += 1; render()
               return
             end
           end
@@ -520,7 +536,8 @@ noctalia.state.watch("sticky_notes.notes", function(value)
     for _, n in ipairs(notes) do prevIds[n.id] = true end
     for _, n in ipairs(newNotes) do
       if not prevIds[n.id] then
-        editingId = n.id; pendingDeleteId = nil; editKey += 1
+        editingId = n.id; editingContent = n.content or ""
+        pendingDeleteId = nil; editKey += 1
         break
       end
     end
@@ -531,14 +548,12 @@ noctalia.state.watch("sticky_notes.notes", function(value)
 end)
 
 -- Only exit the edit view on a false → true transition of blurred, not on
--- every re-publish. The service re-publishes both `notes` AND `blurred` on
--- every keystroke (via updateNote → publish), so an unconditional
--- `editingId = nil` would kick the user out of the editor after every
--- character while blur is on.
+-- every state re-publish. An unconditional `editingId = nil` would otherwise
+-- discard an open draft whenever another note action updates shared state.
 local prevBlurred = false
 noctalia.state.watch("sticky_notes.blurred", function(value)
   local newBlurred = value == true
-  if newBlurred and not prevBlurred then editingId = nil end
+  if newBlurred and not prevBlurred then editingId = nil; editingContent = nil end
   prevBlurred = newBlurred
   blurred = newBlurred
   render()
@@ -553,7 +568,7 @@ end)
 -- Lifecycle
 -- -------------------------------------------------------------------------
 function onOpen(_context)
-  editingId = nil; pendingDeleteId = nil
+  editingId = nil; editingContent = nil; pendingDeleteId = nil
   -- A panel can be instantiated after the service's initial publish. Ask for
   -- the current snapshot so opening it never looks like an empty note list.
   sendCmd({ op = "sync" })
@@ -562,4 +577,8 @@ function onOpen(_context)
     sendCmd({ op = "toggle_blur" })
   end
   render()
+end
+
+function onClose()
+  saveEditingDraft()
 end

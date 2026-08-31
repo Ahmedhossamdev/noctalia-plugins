@@ -17,8 +17,9 @@ API).
     marked with a primary-coloured ring around the swatch.
   - **Full-screen edit view** — click a note preview (or its edit button) to
     open the complete note in a selectable multiline input for quick copying
-    and pasting. Empty notes are auto-deleted when you leave the editor, so
-    the list never fills up with blanks.
+    and pasting. The draft is saved when you leave or submit the editor, which
+    keeps scrolling stable in long notes. Empty notes are auto-deleted when
+    you leave the editor, so the list never fills up with blanks.
   - **Web links** — notes containing an `http://`, `https://`, or `www.`
     address show an external-link button. Click it to open the link in your
     default browser.
