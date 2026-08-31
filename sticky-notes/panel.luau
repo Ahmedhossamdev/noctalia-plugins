@@ -2,6 +2,9 @@
 -- Sticky Notes panel — scrollable list + full-width edit view.
 
 local DRAG_TYPE = "sticky-notes-note"
+-- Pastel note fills are intentionally independent of the active shell theme.
+-- A fixed dark foreground keeps them readable in both light and dark modes.
+local NOTE_TEXT_COLOR = "#111111"
 
 local NOTE_COLORS = {
   { id = "yellow", hex = "#FFF59D", labelKey = "settings.color-yellow" },
@@ -15,7 +18,9 @@ local NOTE_COLORS = {
 
 local notes = {}
 local blurred = false
+local notesReady = false
 local editingId = nil
+local editingContent = nil
 local pendingDeleteId = nil
 local editKey = 0
 -- -1 so the first state-watch fire (initial load) does not trigger auto-open.
@@ -43,25 +48,84 @@ local function findNote(id)
   return nil
 end
 
+-- Return the first web link in a note. We deliberately only accept HTTP(S)
+-- links: notes are user content, so an accidental file:, command:, or custom
+-- URI must never be forwarded to the desktop URL handler.
+local function firstWebLink(content)
+  if type(content) ~= "string" then return nil end
+
+  for token in content:gmatch("%S+") do
+    token = token:gsub("^[%(%[%{<\"']+", "")
+    local url = nil
+    if token:sub(1, 8) == "https://" or token:sub(1, 7) == "http://" then
+      url = token
+    elseif token:sub(1, 4) == "www." then
+      url = "https://" .. token
+    end
+
+    if url ~= nil then
+      -- Natural punctuation after a link should not become part of the URL.
+      url = url:gsub("[%,%.%!%?%;:]+$", "")
+      if url:match("^https://[^%s]+$") or url:match("^http://[^%s]+$") then
+        return url
+      end
+    end
+  end
+  return nil
+end
+
+local function openWebLink(url)
+  if type(url) ~= "string" then return end
+  if not url:match("^https://[^%s]+$") and not url:match("^http://[^%s]+$") then return end
+  -- Argument-array form avoids shell interpolation of note content.
+  noctalia.runAsync({ "xdg-open", url })
+end
+
+-- Preview text is kept compact so short notes do not leave an empty block,
+-- while a long note is visibly shortened before ui.label applies its four-line
+-- layout clamp. Flattening whitespace also prevents manual line breaks from
+-- making a preview taller than the surrounding cards.
+local function previewText(content, fontSize)
+  local compact = (content or ""):gsub("%s+", " ")
+  compact = noctalia.string.trim(compact)
+  if compact == "" then return noctalia.tr("panel.empty-preview") end
+
+  -- Approximate four visual lines for the panel's available width. The label's
+  -- maxLines remains the final guard for unusually wide glyphs or long words.
+  local limit = math.max(96, math.min(220, math.floor(2200 / fontSize)))
+  if #compact > limit then return compact:sub(1, limit - 1) .. "…" end
+  return compact
+end
+
 local function sendCmd(cmd)
   noctalia.state.set("sticky_notes.cmd", cmd)
 end
 
--- Auto-delete empty note and return to list (or just return to list).
+-- Persist the local input draft without forcing a render. This is shared by
+-- Done/Back and onClose, so closing the panel cannot lose a long-note edit.
+local function saveEditingDraft()
+  local note = editingId ~= nil and findNote(editingId) or nil
+  local id = editingId
+  local content = editingContent or (note and note.content) or ""
+  editingId = nil
+  editingContent = nil
+  pendingDeleteId = nil
+
+  if note == nil then return false end
+  if noctalia.string.trim(content) == "" then
+    sendCmd({ op = "remove", id = id })
+    return true
+  elseif note.content ~= content then
+    sendCmd({ op = "update", id = id, content = content })
+    return true
+  end
+  return false
+end
+
+-- Auto-delete an empty note and return to the list (or just return to list).
 -- Called from both the Back button and the Done button.
 local function leaveEdit()
-  local note = editingId ~= nil and findNote(editingId) or nil
-  if note ~= nil and noctalia.string.trim(note.content or "") == "" then
-    local id = editingId
-    editingId = nil
-    pendingDeleteId = nil
-    sendCmd({ op = "remove", id = id })
-    -- The notes-watcher will call render() once the delete is processed.
-  else
-    editingId = nil
-    pendingDeleteId = nil
-    render()
-  end
+  if not saveEditingDraft() then render() end
 end
 
 -- -------------------------------------------------------------------------
@@ -172,14 +236,17 @@ local function notePreviewCard(note)
   local fontSize = noctalia.getConfig("font_size") or 13
   local dateText = formatDate(note.createdAt)
   local isPinned = note.pinned == true
+  local webLink = firstWebLink(note.content)
 
   local body
   if blurred then
     body = blurOverlay()
   else
-    local preview = note.content ~= "" and note.content or noctalia.tr("panel.empty-preview")
-    -- "surface" = dark bg colour in dark themes → readable on light pastels.
-    body = ui.label({ text = preview, fontSize = fontSize, color = "surface", maxLines = 4 })
+    local preview = previewText(note.content, fontSize)
+    body = ui.label({
+      text = preview, fontSize = fontSize, color = NOTE_TEXT_COLOR,
+      maxLines = 4,
+    })
   end
 
   if pendingDeleteId == note.id then
@@ -189,7 +256,7 @@ local function notePreviewCard(note)
       body,
       ui.separator({}),
       ui.row({ gap = 6, align = "center", justify = "center" }, {
-        ui.label({ text = noctalia.tr("panel.confirm-delete"), fontSize = 11, color = "surface" }),
+        ui.label({ text = noctalia.tr("panel.confirm-delete"), fontSize = 11, color = NOTE_TEXT_COLOR }),
         ui.button({
           glyph = "check", text = noctalia.tr("panel.delete-yes"),
           variant = "destructive", controlSize = "sm",
@@ -208,6 +275,10 @@ local function notePreviewCard(note)
 
   return ui.column({
     key = "card-" .. note.id, fill = hex, radius = 8, padding = 10, gap = 6,
+    onClick = not blurred and function()
+      editingId = note.id; editingContent = note.content or ""
+      pendingDeleteId = nil; editKey += 1; render()
+    end or nil,
   }, {
     body,
     ui.separator({}),
@@ -230,11 +301,16 @@ local function notePreviewCard(note)
           justify         = "center",
           tooltip         = noctalia.tr("panel.drag-hint"),
         }, {
-          ui.glyph({ name = "menu-2", size = 12, color = "surface" }),
+          ui.glyph({ name = "menu-2", size = 12, color = NOTE_TEXT_COLOR }),
         }),
-        ui.label({ text = dateText, fontSize = 10, color = "surface" }),
+        ui.label({ text = dateText, fontSize = 10, color = NOTE_TEXT_COLOR }),
       }),
       ui.row({ gap = 4, align = "center" }, {
+        webLink ~= nil and ui.button({
+          glyph = "external-link", variant = "outline", controlSize = "sm",
+          tooltip = noctalia.tr("panel.open-link", { url = webLink }),
+          onClick = function() openWebLink(webLink) end,
+        }) or ui.row({}, {}),
         ui.button({
           glyph = isPinned and "star-filled" or "star",
           variant = "outline", controlSize = "sm",
@@ -245,7 +321,8 @@ local function notePreviewCard(note)
           glyph = "pencil", variant = "outline", controlSize = "sm",
           enabled = not blurred, tooltip = noctalia.tr("panel.edit"),
           onClick = function()
-            editingId = note.id; pendingDeleteId = nil; editKey += 1; render()
+            editingId = note.id; editingContent = note.content or ""
+            pendingDeleteId = nil; editKey += 1; render()
           end,
         }),
         ui.button({
@@ -259,6 +336,14 @@ local function notePreviewCard(note)
 end
 
 local function listView()
+  if not notesReady then
+    return ui.column({ flexGrow = 1, align = "center", justify = "center", gap = 14 }, {
+      ui.glyph({ name = "loader-2", size = 32, color = "on_surface_variant" }),
+      ui.label({ text = noctalia.tr("panel.loading"), fontSize = 13,
+                  color = "on_surface_variant", textAlign = "center" }),
+    })
+  end
+
   if #notes == 0 then
     return ui.column({ flexGrow = 1, align = "center", justify = "center", gap = 14 }, {
       ui.glyph({ name = "note", size = 48, color = "on_surface_variant" }),
@@ -320,7 +405,7 @@ local function editView(note)
     ui.separator({}),
     ui.input({
       key           = "inp-" .. note.id .. "-" .. tostring(editKey),
-      value         = note.content,
+      value         = editingContent or note.content,
       placeholder   = noctalia.tr("panel.placeholder"),
       multiline     = true,
       flexGrow      = 1,
@@ -331,8 +416,11 @@ local function editView(note)
       submitOnEnter = true,
       onSubmit      = "onEditSubmit",
       onChange      = function(value)
-        sendCmd({ op = "update", id = note.id, content = value })
+        -- ui.input owns its current text. Keeping the draft local avoids a
+        -- full panel re-render after every keystroke, which preserves scroll.
+        editingContent = value
       end,
+      focus         = true,
     }),
   })
 
@@ -345,7 +433,7 @@ local function editView(note)
         glyph = "check", text = noctalia.tr("panel.delete-yes"),
         variant = "destructive", controlSize = "sm",
         onClick = function()
-          local id = note.id; pendingDeleteId = nil; editingId = nil
+          local id = note.id; pendingDeleteId = nil; editingId = nil; editingContent = nil
           sendCmd({ op = "remove", id = id })
         end,
       }),
@@ -381,7 +469,7 @@ function render()
   local editNote = editingId ~= nil and findNote(editingId) or nil
   -- If the note we were editing was deleted, fall back to list.
   if editingId ~= nil and editNote == nil then
-    editingId = nil; pendingDeleteId = nil
+    editingId = nil; editingContent = nil; pendingDeleteId = nil
   end
   local inEdit = editNote ~= nil
 
@@ -405,7 +493,7 @@ function render()
         tooltip = blurred and noctalia.tr("panel.unblur") or noctalia.tr("panel.blur"),
         onClick = function() sendCmd({ op = "toggle_blur" }) end,
       }),
-      not inEdit and ui.button({
+      not inEdit and notesReady and ui.button({
         glyph = "plus", variant = "ghost", controlSize = "sm",
         tooltip = noctalia.tr("panel.add"),
         onClick = function()
@@ -413,7 +501,8 @@ function render()
           -- creating another one (prevents unlimited empty-note pile-up).
           for _, n in ipairs(notes) do
             if noctalia.string.trim(n.content or "") == "" then
-              editingId = n.id; pendingDeleteId = nil; editKey += 1; render()
+              editingId = n.id; editingContent = n.content or ""
+              pendingDeleteId = nil; editKey += 1; render()
               return
             end
           end
@@ -447,7 +536,8 @@ noctalia.state.watch("sticky_notes.notes", function(value)
     for _, n in ipairs(notes) do prevIds[n.id] = true end
     for _, n in ipairs(newNotes) do
       if not prevIds[n.id] then
-        editingId = n.id; pendingDeleteId = nil; editKey += 1
+        editingId = n.id; editingContent = n.content or ""
+        pendingDeleteId = nil; editKey += 1
         break
       end
     end
@@ -458,16 +548,19 @@ noctalia.state.watch("sticky_notes.notes", function(value)
 end)
 
 -- Only exit the edit view on a false → true transition of blurred, not on
--- every re-publish. The service re-publishes both `notes` AND `blurred` on
--- every keystroke (via updateNote → publish), so an unconditional
--- `editingId = nil` would kick the user out of the editor after every
--- character while blur is on.
+-- every state re-publish. An unconditional `editingId = nil` would otherwise
+-- discard an open draft whenever another note action updates shared state.
 local prevBlurred = false
 noctalia.state.watch("sticky_notes.blurred", function(value)
   local newBlurred = value == true
-  if newBlurred and not prevBlurred then editingId = nil end
+  if newBlurred and not prevBlurred then editingId = nil; editingContent = nil end
   prevBlurred = newBlurred
   blurred = newBlurred
+  render()
+end)
+
+noctalia.state.watch("sticky_notes.ready", function(value)
+  notesReady = value == true
   render()
 end)
 
@@ -475,10 +568,17 @@ end)
 -- Lifecycle
 -- -------------------------------------------------------------------------
 function onOpen(_context)
-  editingId = nil; pendingDeleteId = nil
+  editingId = nil; editingContent = nil; pendingDeleteId = nil
+  -- A panel can be instantiated after the service's initial publish. Ask for
+  -- the current snapshot so opening it never looks like an empty note list.
+  sendCmd({ op = "sync" })
   local autoBlur = noctalia.getConfig("auto_blur")
   if autoBlur == true and not blurred then
     sendCmd({ op = "toggle_blur" })
   end
   render()
+end
+
+function onClose()
+  saveEditingDraft()
 end

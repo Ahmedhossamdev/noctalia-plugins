@@ -8,14 +8,21 @@ API).
 
 - **Bar widget** — note icon with a live count badge; click to open the
   panel. The count is hidden while blur mode is on.
-- **Panel** — scrollable list of notes, each rendered as a coloured card
-  with a preview of its content and its creation time.
+  - **Panel** — scrollable list of notes, each rendered as a coloured card
+    with a preview of its content and its creation time.
+    Saved notes are loaded before the add action becomes available, so opening
+    the panel cannot briefly present an empty list.
   - **Multiple notes** with per-note color selection from a 7-swatch palette
     (yellow, pink, red, blue, green, orange, purple). The current color is
     marked with a primary-coloured ring around the swatch.
-  - **Full-screen edit view** — coloured card, multiline input, and a
-    live color picker at the top. Empty notes are auto-deleted when you
-    leave the editor, so the list never fills up with blanks.
+  - **Full-screen edit view** — click a note preview (or its edit button) to
+    open the complete note in a selectable multiline input for quick copying
+    and pasting. The draft is saved when you leave or submit the editor, which
+    keeps scrolling stable in long notes. Empty notes are auto-deleted when
+    you leave the editor, so the list never fills up with blanks.
+  - **Web links** — notes containing an `http://`, `https://`, or `www.`
+    address show an external-link button. Click it to open the link in your
+    default browser.
   - **Pin notes** — starred notes float to the top of the list.
   - **Drag to arrange** — grab a note by its `≡` handle and drop it onto
     the thin line between cards to reorder within its group, or drop it
@@ -84,9 +91,9 @@ file by hand is safe as long as the metadata comments are preserved.
 
 - Requires `plugin_api = 24` (declarative `ui.*` panel, `state.watch`
   pub/sub, `writeFile`/`readFile`, drag & drop, and Luau).
-- Note text is deliberately rendered in the theme's `surface` colour
-  (i.e. the dark background colour in dark themes) so it stays readable
-  on the light pastel note fills regardless of your active theme.
+- Note previews use a high-contrast dark foreground, compact to their content,
+  and show at most four lines. Long content is shortened with an ellipsis;
+  click the card to view and select the complete note.
 - The color palette is intentionally small (7 pastels + medium red +
   orange) rather than a full color wheel — sticky notes work best when
   colors are meaningfully distinct.

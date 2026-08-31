@@ -14,6 +14,7 @@
 -- State:
 --   sticky_notes.notes      -> { { id, content, color, createdAt, pinned }, ... }
 --   sticky_notes.blurred    -> bool
+--   sticky_notes.ready      -> bool (saved notes have finished loading)
 --   sticky_notes.save_path  -> string (resolved absolute dir, informational)
 -- Commands (sticky_notes.cmd):
 --   { op = "add" }
@@ -22,6 +23,7 @@
 --   { op = "toggle_pin", id = "..." }
 --   { op = "move",       id = "...", group = "p" | "u", index = N }
 --   { op = "toggle_blur" }
+--   { op = "sync" }
 --
 -- Storage invariant: `notes` is kept in display order — pinned notes first
 -- (newest-first within each group). All mutations preserve this so the
@@ -32,6 +34,7 @@ noctalia.setUpdateInterval(60000)
 local notes = {}
 local blurred = false
 local resolvedDir = nil
+local loaded = false
 
 -- -------------------------------------------------------------------------
 -- Path / format helpers
@@ -242,6 +245,7 @@ end
 local function publish()
   noctalia.state.set("sticky_notes.notes", notes)
   noctalia.state.set("sticky_notes.blurred", blurred)
+  noctalia.state.set("sticky_notes.ready", loaded)
 end
 
 -- -------------------------------------------------------------------------
@@ -401,6 +405,10 @@ noctalia.state.watch("sticky_notes.cmd", function(cmd)
     moveTo(cmd.id, cmd.group, cmd.index)
   elseif op == "toggle_blur" then
     toggleBlur()
+  elseif op == "sync" then
+    -- Panels may start after this service has published its initial state.
+    -- Re-publish on open so they always receive the persisted note list.
+    publish()
   end
   noctalia.state.set("sticky_notes.cmd", nil)
 end)
@@ -412,5 +420,6 @@ end
 initSavePath(function()
   loadData()
   sortDisplay()
+  loaded = true
   publish()
 end)

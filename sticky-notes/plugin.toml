@@ -1,6 +1,6 @@
 id          = "ahmedhossamdev/sticky-notes"
 name        = "Sticky Notes"
-version     = "1.0.0"
+version     = "1.0.4"
 plugin_api  = 24
 author      = "ahmedhossamdev"
 license     = "MIT"
