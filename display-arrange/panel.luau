@@ -19,6 +19,22 @@ local MODE_OPTIONS = {
 -- Scale presets: 0.5× … 3× matching common HiDPI steps.
 local SCALE_PRESETS = { 0.5, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0 }
 
+-- Windows-style orientation: Landscape, Portrait, flipped variants.
+local ORIENTATION_OPTIONS = {
+  { id = "normal", labelKey = "row.orientation-landscape", fallback = "Landscape" },
+  { id = "90",     labelKey = "row.orientation-portrait", fallback = "Portrait" },
+  { id = "180",    labelKey = "row.orientation-landscape-flipped", fallback = "Landscape (flipped)" },
+  { id = "270",    labelKey = "row.orientation-portrait-flipped", fallback = "Portrait (flipped)" },
+}
+
+local function trOr(key, fallback)
+  local ok, val = pcall(noctalia.tr, key)
+  if ok and type(val) == "string" and val ~= "" and val ~= key then
+    return val
+  end
+  return fallback
+end
+
 -- ---------------------------------------------------------------------
 -- Helpers
 -- ---------------------------------------------------------------------
@@ -306,12 +322,40 @@ local function outputCard(row)
     ui.row({ gap = 2, align = "center" }, scaleTicks),
   })
 
+  -- ── Orientation (Windows-style rotation) ──────────────────────────
+  -- Single selector box (same pattern as resolution) to avoid overflow
+  -- from long "Landscape (flipped)" labels in a 2-button row.
+  local curTransform = row.transform or "normal"
+  local orientIdx = 1
+  for i, opt in ipairs(ORIENTATION_OPTIONS) do
+    if opt.id == curTransform then orientIdx = i; break end
+  end
+  local curOrient = ORIENTATION_OPTIONS[orientIdx]
+  local function cycleOrient(dir)
+    local n = #ORIENTATION_OPTIONS
+    local nextIdx = ((orientIdx - 1 + dir) % n) + 1
+    local next = ORIENTATION_OPTIONS[nextIdx]
+    noctalia.state.set("display_arrange.cmd", { op = "set_transform", name = row.name, transform = next.id })
+  end
+  local orientationSection = ui.column({ gap = 4, justify = "start", flexGrow = 1 }, {
+    ui.label({ text = trOr("row.orientation", "Orientation"), fontSize = 9, color = "on_surface_variant" }),
+    ui.row({
+      gap = 2, align = "center",
+      fill = "on_surface/0.08", radius = 6, paddingH = 8, paddingV = 5,
+    }, {
+      ui.label({ text = trOr(curOrient.labelKey, curOrient.fallback), fontSize = 11, flexGrow = 1 }),
+      ui.button({ glyph = "chevron-left",  variant = "ghost", controlSize = "sm", onClick = function() cycleOrient(-1) end }),
+      ui.button({ glyph = "chevron-right", variant = "ghost", controlSize = "sm", onClick = function() cycleOrient(1) end }),
+    }),
+  })
+
   -- ── Assemble card ───────────────────────────────────────────────────
   local cardChildren = { info, ui.separator({}) }
   if resHzRow ~= nil then
     table.insert(cardChildren, resHzRow)
   end
   table.insert(cardChildren, scaleSection)
+  table.insert(cardChildren, orientationSection)
 
   if not row.isPrimary then
     table.insert(cardChildren, ui.separator({}))
@@ -360,6 +404,7 @@ local function displayModeBar()
       selected = isSelected,
       enabled = not opt.unavailable,
       controlSize = "sm",
+      fontSize = 10,
       flexGrow = 1,
       tooltip = noctalia.tr(opt.descKey),
       onClick = function()

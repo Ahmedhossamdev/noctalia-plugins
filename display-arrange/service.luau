@@ -3,7 +3,8 @@
 -- compositor (niri or Hyprland), lets one be "primary" (always anchored
 -- at 0,0), and positions every other output relative to it
 -- (left/right/top/bottom, or a manual x/y). Also persists and re-applies
--- mode (resolution + refresh rate) and scale per output.
+-- mode (resolution + refresh rate), scale, and transform (orientation)
+-- per output.
 -- Compositors may forget runtime changes on restart/config-reload, so
 -- this service re-applies the saved layout on load and whenever the set
 -- of connected outputs changes.
@@ -11,11 +12,12 @@
 -- Persistence: pluginDataDir()/data.json -> { primary = "eDP-1",
 --   rules = { [name] = { direction = "left"|"right"|"top"|"bottom",
 --                         mode = { width, height, refreshRate },
---                         scale = 2.0 } } }
+--                         scale = 2.0,
+--                         transform = "normal"|"90"|"180"|"270" } } }
 -- State:
 --   display_arrange.outputs         -> { { name, make, model, width, height,
 --                                           scale, x, y, isPrimary,
---                                           direction, modes,
+--                                           direction, transform, modes,
 --                                           currentModeWidth,
 --                                           currentModeHeight,
 --                                           currentModeRefreshRate }, ... }
@@ -27,14 +29,15 @@
 --   { op = "set_direction", name = ..., direction = "left"|"right"|"top"|"bottom" }
 --   { op = "set_mode", name = ..., width, height, refreshRate (mHz) }
 --   { op = "set_scale", name = ..., scale = 2.0 }
+--   { op = "set_transform", name = ..., transform = "normal"|"90"|"180"|"270" }
 --   { op = "clear_rule", name = ... }
 --   { op = "confirm_layout" }  -- keep the pending change
 --   { op = "revert_layout" }  -- undo the pending change now, instead of waiting
 --   { op = "refresh" }
 --
--- Every set_primary/set_direction/set_mode/set_scale starts a 30s
--- confirmation window: if not confirmed in time, the change is undone
--- automatically so a bad guess can't strand the user.
+-- Every set_primary/set_direction/set_mode/set_scale/set_transform starts
+-- a 30s confirmation window: if not confirmed in time, the change is
+-- undone automatically so a bad guess can't strand the user.
 
 local CONFIRM_WINDOW_MS = 30000
 
@@ -52,11 +55,49 @@ elseif noctalia.getenv("NIRI_SOCKET") ~= nil then
 end
 
 local primary = nil
-local rules = {} -- [name] = { direction = "left"|"right"|"top"|"bottom" }
+local rules = {} -- [name] = { direction = "left"|"right"|"top"|"bottom", transform = "normal"|... }
 local displayMode = "extend" -- "extend"|"duplicate"|"primary-only"|"second-only"
 local applying = false
 local lastConnectedKey = ""
 local pendingConfirm = nil -- { deadlineMs, prevPrimary, prevRules, prevMode }
+
+-- ---------------------------------------------------------------------
+-- Transform (orientation) — Windows-style: Landscape, Portrait,
+-- Landscape flipped, Portrait flipped. Internally stored as niri
+-- transform strings so both compositors share one representation.
+-- ---------------------------------------------------------------------
+local VALID_TRANSFORMS = { normal = true, ["90"] = true, ["180"] = true, ["270"] = true,
+  flipped = true, ["flipped-90"] = true, ["flipped-180"] = true, ["flipped-270"] = true }
+local HYPR_TO_TRANSFORM = { "normal", "90", "180", "270", "flipped", "flipped-90", "flipped-180", "flipped-270" }
+local TRANSFORM_TO_HYPR = { normal = 0, ["90"] = 1, ["180"] = 2, ["270"] = 3,
+  flipped = 4, ["flipped-90"] = 5, ["flipped-180"] = 6, ["flipped-270"] = 7 }
+
+local function normalizeTransform(value)
+  if type(value) == "number" then
+    return HYPR_TO_TRANSFORM[value + 1] or "normal"
+  end
+  if type(value) ~= "string" then
+    return "normal"
+  end
+  local v = string.lower(value)
+  if v == "normal" or v == "_90" or v == "90" then
+    return v == "_90" and "90" or v
+  end
+  if v == "_180" then return "180" end
+  if v == "_270" then return "270" end
+  if v == "180" or v == "270" then return v end
+  if v == "flipped" or v == "flipped-90" or v == "flipped-180" or v == "flipped-270" then
+    return v
+  end
+  if v == "flipped90" then return "flipped-90" end
+  if v == "flipped180" then return "flipped-180" end
+  if v == "flipped270" then return "flipped-270" end
+  return "normal"
+end
+
+local function isPortraitTransform(t)
+  return t == "90" or t == "270" or t == "flipped-90" or t == "flipped-270"
+end
 
 -- ---------------------------------------------------------------------
 -- Persistence
@@ -150,6 +191,7 @@ if compositor == "niri" then
                 scale = log.scale or 1,
                 x = log.x or 0,
                 y = log.y or 0,
+                transform = normalizeTransform(log.transform),
                 modes = modes,
                 currentModeWidth = cm and cm.width or nil,
                 currentModeHeight = cm and cm.height or nil,
@@ -212,6 +254,16 @@ if compositor == "niri" then
     end
   end
 
+  adapter.setOutputTransform = function(name, transform)
+    noctalia.runAsync({
+      "niri", "msg", "output", name, "transform", transform,
+    }, function(result)
+      if result.exitCode ~= 0 then
+        noctalia.log("DisplayArrange: failed to set transform for " .. name .. ": " .. (result.stderr or ""))
+      end
+    end)
+  end
+
 -- =====================================================================
 -- Hyprland adapter
 -- =====================================================================
@@ -219,7 +271,9 @@ elseif compositor == "hyprland" then
   -- Cache last-known state per output for building "monitor" keyword strings.
   -- Hyprland's "monitor" keyword is monolithic: NAME,MODE,SCALE,OFFSET
   -- so changing any one property requires the current values of the others.
-  local hyprCache = {} -- [name] = { modeStr, scale, x, y, enabled }
+  -- Transform is applied via a separate "NAME,transform,INT" keyword which
+  -- must come after the main monitor keyword.
+  local hyprCache = {} -- [name] = { modeStr, scale, x, y, enabled, transform }
 
   -- Parse "WxH@RATE" mode string into { width, height, refreshRate (Hz float) }
   local function parseHyprMode(modeStr)
@@ -285,6 +339,7 @@ elseif compositor == "hyprland" then
                 scale = o.scale or 1,
                 x = enabled and o.x or 0,
                 y = enabled and o.y or 0,
+                transform = normalizeTransform(o.transform),
                 modes = modes,
                 currentModeWidth = enabled and o.width or nil,
                 currentModeHeight = enabled and o.height or nil,
@@ -298,6 +353,7 @@ elseif compositor == "hyprland" then
                 x = enabled and o.x or 0,
                 y = enabled and o.y or 0,
                 enabled = enabled,
+                transform = normalizeTransform(o.transform),
               }
 
               table.insert(list, entry)
@@ -324,6 +380,11 @@ elseif compositor == "hyprland" then
         }, function(result)
           if result.exitCode ~= 0 then
             noctalia.log("DisplayArrange: failed to enable " .. name .. ": " .. (result.stderr or ""))
+          else
+            local tInt = TRANSFORM_TO_HYPR[cached.transform or "normal"] or 0
+            if tInt ~= 0 then
+              noctalia.runAsync({ "hyprctl", "keyword", "monitor", name .. ",transform," .. tostring(tInt) }, function() end)
+            end
           end
         end)
       else
@@ -385,13 +446,15 @@ elseif compositor == "hyprland" then
     local offset = string.format("%dx%d", math.floor(useX), math.floor(useY))
     local keyword = name .. "," .. modeStr .. "," .. useScale .. "," .. offset
 
-    -- Update cache
+    -- Update cache (preserve transform unless changed via setOutputTransform)
+    local prevTransform = hyprCache[name] ~= nil and hyprCache[name].transform or (entry ~= nil and entry.transform) or "normal"
     hyprCache[name] = {
       modeStr = modeStr ~= "preferred" and modeStr or nil,
       scale = useScale,
       x = math.floor(useX),
       y = math.floor(useY),
       enabled = true,
+      transform = prevTransform,
     }
 
     noctalia.runAsync({
@@ -403,12 +466,31 @@ elseif compositor == "hyprland" then
     end)
   end
 
+  adapter.setOutputTransform = function(name, transform)
+    local tNorm = normalizeTransform(transform)
+    local tInt = TRANSFORM_TO_HYPR[tNorm] or 0
+    local cached = hyprCache[name]
+    if cached ~= nil then
+      cached.transform = tNorm
+    else
+      hyprCache[name] = { modeStr = nil, scale = 1, x = 0, y = 0, enabled = true, transform = tNorm }
+    end
+    noctalia.runAsync({
+      "hyprctl", "keyword", "monitor", name .. ",transform," .. tostring(tInt),
+    }, function(result)
+      if result.exitCode ~= 0 then
+        noctalia.log("DisplayArrange: failed to set transform for " .. name .. ": " .. (result.stderr or ""))
+      end
+    end)
+  end
+
 else
   -- Fallback: no supported compositor detected.
   noctalia.log("DisplayArrange: no supported compositor detected (expected niri or Hyprland)")
   adapter.fetchOutputs = function(callback) callback({}) end
   adapter.setOutputEnabled = function() end
   adapter.setOutputConfig = function() end
+  adapter.setOutputTransform = function() end
 end
 
 -- Local wrapper so the rest of the code can call fetchOutputs(callback)
@@ -490,6 +572,23 @@ local function applyModeAndScale(entry)
   return entry
 end
 
+local function applyTransform(entry)
+  local rule = rules[entry.name]
+  local want = rule ~= nil and rule.transform or nil
+  if want ~= nil and VALID_TRANSFORMS[want] then
+    if entry.transform ~= want then
+      adapter.setOutputTransform(entry.name, want)
+      if isPortraitTransform(entry.transform) ~= isPortraitTransform(want) then
+        entry.width, entry.height = entry.height, entry.width
+      end
+      entry.transform = want
+    end
+  elseif entry.transform == nil then
+    entry.transform = "normal"
+  end
+  return entry
+end
+
 local function applyLayout()
   applying = true
   fetchOutputs(function(list)
@@ -500,6 +599,7 @@ local function applyLayout()
       for _, entry in ipairs(list) do
         if entry.name == primary then
           adapter.setOutputEnabled(entry.name, true)
+          applyTransform(entry)
           applyModeAndScale(entry)
           adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
           entry.x = 0; entry.y = 0
@@ -518,6 +618,7 @@ local function applyLayout()
           entry.enabled = false
         else
           adapter.setOutputEnabled(entry.name, true)
+          applyTransform(entry)
           applyModeAndScale(entry)
           if not placedFirst then
             adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
@@ -529,8 +630,11 @@ local function applyLayout()
 
     else -- "extend" (default)
       -- Enable everything and arrange per direction rules.
+      -- Transform first: 90/270 swaps logical width/height, which the
+      -- position math below depends on.
       for _, entry in ipairs(list) do
         adapter.setOutputEnabled(entry.name, true)
+        applyTransform(entry)
         applyModeAndScale(entry)
       end
       local primaryOut = primary ~= nil and findOutput(list, primary) or nil
@@ -615,17 +719,23 @@ function publish(list)
       local displayModeW  = (rule and rule.mode and rule.mode.width)        or o.currentModeWidth
       local displayModeH  = (rule and rule.mode and rule.mode.height)       or o.currentModeHeight
       local displayModeHz = (rule and rule.mode and rule.mode.refreshRate)  or o.currentModeRefreshRate
+      local displayTransform = normalizeTransform((rule and rule.transform) or o.transform)
+      local pubW, pubH = o.width, o.height
+      if isPortraitTransform(o.transform or "normal") ~= isPortraitTransform(displayTransform) then
+        pubW, pubH = pubH, pubW
+      end
       table.insert(outRows, {
         name = o.name,
         make = o.make,
         model = o.model,
-        width = o.width,
-        height = o.height,
+        width = pubW,
+        height = pubH,
         scale = displayScale,
         x = o.x,
         y = o.y,
         isPrimary = o.name == primary,
         direction = rule and rule.direction or "",
+        transform = displayTransform,
         modes = o.modes or {},
         currentModeWidth = displayModeW,
         currentModeHeight = displayModeH,
@@ -656,10 +766,10 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
   if op == "set_primary" and type(cmd.name) == "string" then
     if cmd.name ~= primary then
       armConfirm()
-      -- The new primary has no direction, but keep any mode/scale rules for it.
+      -- The new primary has no direction, but keep any mode/scale/transform rules for it.
       local existing = rules[cmd.name] or {}
-      if existing.mode ~= nil or existing.scale ~= nil then
-        rules[cmd.name] = { mode = existing.mode, scale = existing.scale }
+      if existing.mode ~= nil or existing.scale ~= nil or existing.transform ~= nil then
+        rules[cmd.name] = { mode = existing.mode, scale = existing.scale, transform = existing.transform }
       else
         rules[cmd.name] = nil
       end
@@ -669,24 +779,33 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
     end
   elseif op == "set_direction" and type(cmd.name) == "string" and type(cmd.direction) == "string" then
     armConfirm()
-    -- Preserve any existing mode/scale when updating direction.
+    -- Preserve any existing mode/scale/transform when updating direction.
     local existing = rules[cmd.name] or {}
-    rules[cmd.name] = { direction = cmd.direction, mode = existing.mode, scale = existing.scale }
+    rules[cmd.name] = { direction = cmd.direction, mode = existing.mode, scale = existing.scale, transform = existing.transform }
     saveData()
     applyLayout()
   elseif op == "set_mode" and type(cmd.name) == "string" and type(cmd.width) == "number" then
     armConfirm()
     local existing = rules[cmd.name] or {}
-    rules[cmd.name] = { direction = existing.direction, scale = existing.scale,
+    rules[cmd.name] = { direction = existing.direction, scale = existing.scale, transform = existing.transform,
       mode = { width = cmd.width, height = cmd.height, refreshRate = cmd.refreshRate } }
     saveData()
     applyLayout()
   elseif op == "set_scale" and type(cmd.name) == "string" and type(cmd.scale) == "number" then
     armConfirm()
     local existing = rules[cmd.name] or {}
-    rules[cmd.name] = { direction = existing.direction, mode = existing.mode, scale = cmd.scale }
+    rules[cmd.name] = { direction = existing.direction, mode = existing.mode, transform = existing.transform, scale = cmd.scale }
     saveData()
     applyLayout()
+  elseif op == "set_transform" and type(cmd.name) == "string" and type(cmd.transform) == "string" then
+    local tNorm = normalizeTransform(cmd.transform)
+    if VALID_TRANSFORMS[tNorm] then
+      armConfirm()
+      local existing = rules[cmd.name] or {}
+      rules[cmd.name] = { direction = existing.direction, mode = existing.mode, scale = existing.scale, transform = tNorm }
+      saveData()
+      applyLayout()
+    end
   elseif op == "set_display_mode" and type(cmd.mode) == "string" then
     local validModes = { extend = true, ["primary-only"] = true, ["second-only"] = true }
     if validModes[cmd.mode] and cmd.mode ~= displayMode then
