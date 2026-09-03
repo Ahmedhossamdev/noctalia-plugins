@@ -2,7 +2,7 @@
 
 Pick where each connected display sits relative to your primary one — left,
 right, above, below — for [Noctalia Shell](https://github.com/noctalia-dev/noctalia)
-v5 (Luau plugin API) on [niri](https://github.com/YaLTeR/niri).
+v5 (Luau plugin API) on [niri](https://github.com/YaLTeR/niri) or [Hyprland](https://hyprland.org/).
 
 ## Features
 
@@ -14,7 +14,7 @@ v5 (Luau plugin API) on [niri](https://github.com/YaLTeR/niri).
     star button on any non-primary card.
   - Point every other display **left / right / above / below** the primary
     with the four direction buttons — the exact x/y is computed from each
-    display's logical size and applied immediately via niri's IPC.
+    display's logical size and applied immediately via the compositor's IPC.
 - The layout is **re-applied automatically** whenever the set of connected
   displays changes (e.g. plugging in a monitor), and once on plugin/service
   startup — so your arrangement survives reconnects and shell restarts
@@ -22,8 +22,9 @@ v5 (Luau plugin API) on [niri](https://github.com/YaLTeR/niri).
 
 ## Requirements
 
-- `niri` — the compositor itself; this plugin drives `niri msg output ...`
-  directly and only makes sense under niri.
+- A supported Wayland compositor:
+  - [niri](https://github.com/YaLTeR/niri) — drives `niri msg output ...` directly
+  - [Hyprland](https://hyprland.org/) — drives `hyprctl keyword monitor ...` directly
 
 ## Installation
 
@@ -57,22 +58,21 @@ noctalia msg panel-toggle ahmedhossamdev/display-arrange:panel
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| Refresh interval | 10s | How often the service polls `niri msg outputs` for connected-display changes. |
+| Refresh interval | 10s | How often the service polls the compositor for connected-display changes. |
 | Re-apply layout on hotplug | on | Automatically re-apply the saved arrangement when the connected-display set changes. |
 
 ## Notes
 
-- niri only accepts output-position changes at runtime
-  (`niri msg output <name> position set <x> <y>`) and explicitly does not
-  persist them into `config.kdl` — a restart or a config reload forgets
-  them. This plugin doesn't edit `config.kdl` either; instead its service
+- Compositors may not persist runtime output-position changes — niri forgets
+  them on restart/config-reload, and Hyprland's `hyprctl keyword` changes are
+  temporary. This plugin doesn't edit config files; instead its service
   re-applies the saved layout every time it starts, which covers normal
-  login/hotplug persistence without touching your niri config.
+  login/hotplug persistence without touching your compositor config.
 - Each non-primary display is positioned **relative to the primary only**
   (not chained to its neighbors). If two displays are both set to, say,
   "right of primary", they'll land in the same spot — pick different
   directions, or make one of them primary instead.
 - Manual/absolute x,y placement isn't exposed in the panel — only the four
-  relative directions. If you need finer control, edit your niri
-  `config.kdl` `output` blocks directly for a permanent layout.
+  relative directions. If you need finer control, edit your compositor's
+  config directly for a permanent layout.
 - Requires `plugin_api = 24`.

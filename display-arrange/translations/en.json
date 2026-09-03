@@ -29,13 +29,13 @@
     "second-only": "Second screen only",
     "extend-desc": "Extend the desktop across all displays",
     "duplicate-desc": "Show the same image on all displays",
-    "duplicate-unavailable-desc": "Mirroring is not supported at runtime — niri only allows this via config.kdl",
+    "duplicate-unavailable-desc": "Mirroring is not supported at runtime — use your compositor's config to enable display mirroring",
     "primary-only-desc": "Use only the primary (PC) display",
     "second-only-desc": "Use only the secondary display(s)"
   },
   "settings": {
     "refresh-interval": "Refresh interval (seconds)",
-    "refresh-interval-desc": "How often to poll niri for connected-output changes",
+    "refresh-interval-desc": "How often to poll the compositor for connected-output changes",
     "auto-reapply": "Re-apply layout on hotplug",
     "auto-reapply-desc": "Automatically re-apply the saved arrangement whenever the set of connected displays changes"
   }

@@ -1,11 +1,12 @@
 --!nonstrict
--- Display Arrange service — reads connected niri outputs, lets one be
--- "primary" (always anchored at 0,0), and positions every other output
--- relative to it (left/right/top/bottom, or a manual x/y). Also persists
--- and re-applies mode (resolution + refresh rate) and scale per output.
--- niri forgets these runtime changes on restart/config-reload, so this
--- service re-applies the saved layout on load and whenever the set of
--- connected outputs changes, instead of touching the user's config.kdl.
+-- Display Arrange service — reads connected outputs from the running
+-- compositor (niri or Hyprland), lets one be "primary" (always anchored
+-- at 0,0), and positions every other output relative to it
+-- (left/right/top/bottom, or a manual x/y). Also persists and re-applies
+-- mode (resolution + refresh rate) and scale per output.
+-- Compositors may forget runtime changes on restart/config-reload, so
+-- this service re-applies the saved layout on load and whenever the set
+-- of connected outputs changes.
 --
 -- Persistence: pluginDataDir()/data.json -> { primary = "eDP-1",
 --   rules = { [name] = { direction = "left"|"right"|"top"|"bottom",
@@ -39,6 +40,16 @@ local CONFIRM_WINDOW_MS = 30000
 
 local userIntervalMs = (noctalia.getConfig("refresh_interval") or 10) * 1000
 noctalia.setUpdateInterval(userIntervalMs)
+
+-- ---------------------------------------------------------------------
+-- Compositor detection
+-- ---------------------------------------------------------------------
+local compositor = "unknown"
+if os.getenv("HYPRLAND_INSTANCE_SIGNATURE") ~= nil then
+  compositor = "hyprland"
+elseif os.getenv("NIRI_SOCKET") ~= nil then
+  compositor = "niri"
+end
 
 local primary = nil
 local rules = {} -- [name] = { direction = "left"|"right"|"top"|"bottom" }
@@ -94,105 +105,316 @@ local function loadData()
 end
 
 -- ---------------------------------------------------------------------
--- niri IPC
+-- Compositor adapter — abstracts IPC differences between niri and Hyprland.
+-- Each adapter provides: fetchOutputs, setOutputEnabled, setOutputConfig.
+-- setOutputConfig applies mode + scale + position atomically (required for
+-- Hyprland's monolithic "monitor" keyword; niri handles them independently).
 -- ---------------------------------------------------------------------
-local function fetchOutputs(callback)
-  noctalia.runAsync({ "niri", "msg", "--json", "outputs" }, function(result)
-    local list = {}
-    if result.exitCode == 0 and result.stdout then
-      local decoded = noctalia.json.decode(result.stdout)
-      if type(decoded) == "table" then
-        for name, o in pairs(decoded) do
-          if type(o) == "table" then
-            -- Include disabled outputs (logical == null) so we can re-enable them later.
-            local enabled = type(o.logical) == "table"
-            local log = enabled and o.logical or {}
-            local modesRaw = type(o.modes) == "table" and o.modes or {}
-            local modes = {}
-            for _, m in ipairs(modesRaw) do
-              if type(m) == "table" and m.width and m.height and m.refresh_rate then
-                table.insert(modes, { width = m.width, height = m.height, refreshRate = m.refresh_rate, isPreferred = m.is_preferred == true })
+local adapter = {}
+
+-- =====================================================================
+-- niri adapter
+-- =====================================================================
+if compositor == "niri" then
+  adapter.fetchOutputs = function(callback)
+    noctalia.runAsync({ "niri", "msg", "--json", "outputs" }, function(result)
+      local list = {}
+      if result.exitCode == 0 and result.stdout then
+        local decoded = noctalia.json.decode(result.stdout)
+        if type(decoded) == "table" then
+          for name, o in pairs(decoded) do
+            if type(o) == "table" then
+              local enabled = type(o.logical) == "table"
+              local log = enabled and o.logical or {}
+              local modesRaw = type(o.modes) == "table" and o.modes or {}
+              local modes = {}
+              for _, m in ipairs(modesRaw) do
+                if type(m) == "table" and m.width and m.height and m.refresh_rate then
+                  table.insert(modes, { width = m.width, height = m.height, refreshRate = m.refresh_rate, isPreferred = m.is_preferred == true })
+                end
               end
+              table.sort(modes, function(a, b)
+                local aPixels = a.width * a.height
+                local bPixels = b.width * b.height
+                if aPixels ~= bPixels then return aPixels < bPixels end
+                return a.refreshRate < b.refreshRate
+              end)
+              local cm = type(o.current_mode) == "table" and o.current_mode or nil
+              table.insert(list, {
+                name = name,
+                make = o.make or "",
+                model = o.model or "",
+                enabled = enabled,
+                width = log.width or 0,
+                height = log.height or 0,
+                scale = log.scale or 1,
+                x = log.x or 0,
+                y = log.y or 0,
+                modes = modes,
+                currentModeWidth = cm and cm.width or nil,
+                currentModeHeight = cm and cm.height or nil,
+                currentModeRefreshRate = cm and cm.refresh_rate or nil,
+              })
             end
-            -- Sort: lowest resolution first, then lowest refresh rate first.
-            table.sort(modes, function(a, b)
-              local aPixels = a.width * a.height
-              local bPixels = b.width * b.height
-              if aPixels ~= bPixels then return aPixels < bPixels end
-              return a.refreshRate < b.refreshRate
-            end)
-            local cm = type(o.current_mode) == "table" and o.current_mode or nil
-            table.insert(list, {
-              name = name,
-              make = o.make or "",
-              model = o.model or "",
-              enabled = enabled,
-              width = log.width or 0,
-              height = log.height or 0,
-              scale = log.scale or 1,
-              x = log.x or 0,
-              y = log.y or 0,
-              modes = modes,
-              currentModeWidth = cm and cm.width or nil,
-              currentModeHeight = cm and cm.height or nil,
-              currentModeRefreshRate = cm and cm.refresh_rate or nil,
-            })
           end
         end
       end
-    end
-    table.sort(list, function(a, b)
-      return a.name < b.name
+      table.sort(list, function(a, b)
+        return a.name < b.name
+      end)
+      callback(list)
     end)
-    callback(list)
-  end)
+  end
+
+  adapter.setOutputEnabled = function(name, enabled)
+    noctalia.runAsync({
+      "niri", "msg", "output", name, enabled and "on" or "off",
+    }, function(result)
+      if result.exitCode ~= 0 then
+        noctalia.log("DisplayArrange: failed to set output " .. name .. " " .. (enabled and "on" or "off") .. ": " .. (result.stderr or ""))
+      end
+    end)
+  end
+
+  adapter.setOutputConfig = function(name, entry, modeW, modeH, modeHz, scale, x, y)
+    -- niri: apply mode, scale, and position as separate commands.
+    if modeW ~= nil and modeH ~= nil and modeHz ~= nil then
+      local hz = math.floor(modeHz / 1000 + 0.5)
+      noctalia.runAsync({
+        "niri", "msg", "output", name, "mode",
+        string.format("%dx%d@%d", modeW, modeH, hz),
+      }, function(result)
+        if result.exitCode ~= 0 then
+          noctalia.log("DisplayArrange: failed to set mode for " .. name .. ": " .. (result.stderr or ""))
+        end
+      end)
+    end
+    if scale ~= nil then
+      noctalia.runAsync({
+        "niri", "msg", "output", name, "scale", tostring(scale),
+      }, function(result)
+        if result.exitCode ~= 0 then
+          noctalia.log("DisplayArrange: failed to set scale for " .. name .. ": " .. (result.stderr or ""))
+        end
+      end)
+    end
+    if x ~= nil and y ~= nil then
+      -- niri's CLI (clap) treats a leading "-123" as an unrecognized flag,
+      -- unless "--" tells it to stop parsing options.
+      noctalia.runAsync({
+        "niri", "msg", "output", name, "position", "set", "--",
+        tostring(math.floor(x)), tostring(math.floor(y)),
+      }, function(result)
+        if result.exitCode ~= 0 then
+          noctalia.log("DisplayArrange: failed to position " .. name .. ": " .. (result.stderr or ""))
+        end
+      end)
+    end
+  end
+
+-- =====================================================================
+-- Hyprland adapter
+-- =====================================================================
+elseif compositor == "hyprland" then
+  -- Cache last-known state per output for building "monitor" keyword strings.
+  -- Hyprland's "monitor" keyword is monolithic: NAME,MODE,SCALE,OFFSET
+  -- so changing any one property requires the current values of the others.
+  local hyprCache = {} -- [name] = { modeStr, scale, x, y, enabled }
+
+  -- Parse "WxH@RATE" mode string into { width, height, refreshRate (Hz float) }
+  local function parseHyprMode(modeStr)
+    local w, h, r = modeStr:match("(%d+)x(%d+)@([%d%.]+)")
+    if w and h and r then
+      return { width = tonumber(w), height = tonumber(h), refreshRate = tonumber(r) }
+    end
+    return nil
+  end
+
+  -- Build a "WxH@RATE" mode string from numeric values.
+  local function buildModeStr(width, height, refreshRateMhz)
+    if refreshRateMhz ~= nil then
+      local hz = refreshRateMhz / 1000
+      return string.format("%dx%d@%.5f", width, height, hz)
+    end
+    return nil
+  end
+
+  adapter.fetchOutputs = function(callback)
+    noctalia.runAsync({ "hyprctl", "monitors", "-j" }, function(result)
+      local list = {}
+      if result.exitCode == 0 and result.stdout then
+        local decoded = noctalia.json.decode(result.stdout)
+        if type(decoded) == "table" then
+          for _, o in ipairs(decoded) do
+            if type(o) == "table" then
+              local enabled = o.disabled ~= true
+              local modesRaw = type(o.availableModes) == "table" and o.availableModes or {}
+              local modes = {}
+              for _, modeStr in ipairs(modesRaw) do
+                if type(modeStr) == "string" then
+                  local parsed = parseHyprMode(modeStr)
+                  if parsed ~= nil then
+                    table.insert(modes, {
+                      width = parsed.width,
+                      height = parsed.height,
+                      refreshRate = parsed.refreshRate * 1000, -- store as mHz for internal use
+                      isPreferred = false,
+                    })
+                  end
+                end
+              end
+              table.sort(modes, function(a, b)
+                local aPixels = a.width * a.height
+                local bPixels = b.width * b.height
+                if aPixels ~= bPixels then return aPixels < bPixels end
+                return a.refreshRate < b.refreshRate
+              end)
+
+              local cmStr = nil
+              if enabled then
+                cmStr = string.format("%dx%d@%.5f", o.width, o.height, o.refreshRate)
+              end
+
+              local entry = {
+                name = o.name,
+                make = o.make or "",
+                model = o.model or "",
+                enabled = enabled,
+                width = enabled and o.width or 0,
+                height = enabled and o.height or 0,
+                scale = o.scale or 1,
+                x = enabled and o.x or 0,
+                y = enabled and o.y or 0,
+                modes = modes,
+                currentModeWidth = enabled and o.width or nil,
+                currentModeHeight = enabled and o.height or nil,
+                currentModeRefreshRate = enabled and (o.refreshRate * 1000) or nil,
+              }
+
+              -- Update cache with live state
+              hyprCache[o.name] = {
+                modeStr = cmStr,
+                scale = o.scale or 1,
+                x = enabled and o.x or 0,
+                y = enabled and o.y or 0,
+                enabled = enabled,
+              }
+
+              table.insert(list, entry)
+            end
+          end
+        end
+      end
+      table.sort(list, function(a, b)
+        return a.name < b.name
+      end)
+      callback(list)
+    end)
+  end
+
+  adapter.setOutputEnabled = function(name, enabled)
+    if enabled then
+      -- Use cached values if available, otherwise preferred/auto defaults.
+      local cached = hyprCache[name]
+      if cached ~= nil and cached.modeStr ~= nil then
+        local offset = string.format("%dx%d", cached.x, cached.y)
+        noctalia.runAsync({
+          "hyprctl", "keyword", "monitor",
+          name .. "," .. cached.modeStr .. "," .. cached.scale .. "," .. offset,
+        }, function(result)
+          if result.exitCode ~= 0 then
+            noctalia.log("DisplayArrange: failed to enable " .. name .. ": " .. (result.stderr or ""))
+          end
+        end)
+      else
+        noctalia.runAsync({
+          "hyprctl", "keyword", "monitor",
+          name .. ",preferred,auto,0",
+        }, function(result)
+          if result.exitCode ~= 0 then
+            noctalia.log("DisplayArrange: failed to enable " .. name .. ": " .. (result.stderr or ""))
+          end
+        end)
+      end
+    else
+      noctalia.runAsync({
+        "hyprctl", "keyword", "monitor",
+        name .. ",disable",
+      }, function(result)
+        if result.exitCode ~= 0 then
+          noctalia.log("DisplayArrange: failed to disable " .. name .. ": " .. (result.stderr or ""))
+        end
+      end)
+    end
+  end
+
+  adapter.setOutputConfig = function(name, entry, modeW, modeH, modeHz, scale, x, y)
+    -- Build the full mode string, preferring explicit values, then cached,
+    -- then entry values, then "preferred" as final fallback.
+    local modeStr = nil
+    if modeW ~= nil and modeH ~= nil and modeHz ~= nil then
+      modeStr = buildModeStr(modeW, modeH, modeHz)
+    end
+    if modeStr == nil then
+      local cached = hyprCache[name]
+      if cached ~= nil then
+        modeStr = cached.modeStr
+      end
+    end
+    if modeStr == nil and entry ~= nil and entry.currentModeWidth ~= nil then
+      modeStr = buildModeStr(entry.currentModeWidth, entry.currentModeHeight, entry.currentModeRefreshRate)
+    end
+    if modeStr == nil then
+      modeStr = "preferred"
+    end
+
+    local useScale = scale
+    if useScale == nil then
+      local cached = hyprCache[name]
+      useScale = cached ~= nil and cached.scale or (entry ~= nil and entry.scale) or 1
+    end
+
+    local useX = x
+    local useY = y
+    if useX == nil or useY == nil then
+      local cached = hyprCache[name]
+      useX = useX or (cached ~= nil and cached.x) or (entry ~= nil and entry.x) or 0
+      useY = useY or (cached ~= nil and cached.y) or (entry ~= nil and entry.y) or 0
+    end
+
+    local offset = string.format("%dx%d", math.floor(useX), math.floor(useY))
+    local keyword = name .. "," .. modeStr .. "," .. useScale .. "," .. offset
+
+    -- Update cache
+    hyprCache[name] = {
+      modeStr = modeStr ~= "preferred" and modeStr or nil,
+      scale = useScale,
+      x = math.floor(useX),
+      y = math.floor(useY),
+      enabled = true,
+    }
+
+    noctalia.runAsync({
+      "hyprctl", "keyword", "monitor", keyword,
+    }, function(result)
+      if result.exitCode ~= 0 then
+        noctalia.log("DisplayArrange: failed to configure " .. name .. ": " .. (result.stderr or ""))
+      end
+    end)
+  end
+
+else
+  -- Fallback: no supported compositor detected.
+  noctalia.log("DisplayArrange: no supported compositor detected (expected niri or Hyprland)")
+  adapter.fetchOutputs = function(callback) callback({}) end
+  adapter.setOutputEnabled = function() end
+  adapter.setOutputConfig = function() end
 end
 
-local function setOutputEnabled(name, enabled)
-  noctalia.runAsync({
-    "niri", "msg", "output", name, enabled and "on" or "off",
-  }, function(result)
-    if result.exitCode ~= 0 then
-      noctalia.log("DisplayArrange: failed to set output " .. name .. " " .. (enabled and "on" or "off") .. ": " .. (result.stderr or ""))
-    end
-  end)
-end
-
-local function setMode(name, width, height, refreshRateMhz)
-  local hz = math.floor(refreshRateMhz / 1000 + 0.5)
-  noctalia.runAsync({
-    "niri", "msg", "output", name, "mode",
-    string.format("%dx%d@%d", width, height, hz),
-  }, function(result)
-    if result.exitCode ~= 0 then
-      noctalia.log("DisplayArrange: failed to set mode for " .. name .. ": " .. (result.stderr or ""))
-    end
-  end)
-end
-
-local function setScale(name, scale)
-  noctalia.runAsync({
-    "niri", "msg", "output", name, "scale", tostring(scale),
-  }, function(result)
-    if result.exitCode ~= 0 then
-      noctalia.log("DisplayArrange: failed to set scale for " .. name .. ": " .. (result.stderr or ""))
-    end
-  end)
-end
-
-local function setPosition(name, x, y)
-  -- niri's CLI (clap) treats a leading "-123" as an unrecognized flag, not a
-  -- value, unless "--" tells it to stop parsing options - without this,
-  -- every negative x/y (i.e. every "left" or "top" placement relative to a
-  -- primary at 0,0) silently failed to apply.
-  noctalia.runAsync({
-    "niri", "msg", "output", name, "position", "set", "--",
-    tostring(math.floor(x)), tostring(math.floor(y)),
-  }, function(result)
-    if result.exitCode ~= 0 then
-      noctalia.log("DisplayArrange: failed to position " .. name .. ": " .. (result.stderr or ""))
-    end
-  end)
+-- Local wrapper so the rest of the code can call fetchOutputs(callback)
+-- without knowing which compositor adapter is active.
+local function fetchOutputs(callback)
+  adapter.fetchOutputs(callback)
 end
 
 -- ---------------------------------------------------------------------
@@ -211,7 +433,7 @@ local function ensureDefaultPrimary(list)
   if primary ~= nil and findOutput(list, primary) ~= nil then
     return
   end
-  -- Prefer whatever niri already anchored at the origin among enabled outputs;
+  -- Prefer whatever the compositor already anchored at the origin among enabled outputs;
   -- fall back to any enabled output, then any output alphabetically.
   local pick = nil
   for _, o in ipairs(list) do
@@ -250,14 +472,22 @@ end
 
 local function applyModeAndScale(entry)
   local rule = rules[entry.name]
+  local modeW, modeH, modeHz, scale
   if rule ~= nil then
     if rule.mode ~= nil then
-      setMode(entry.name, rule.mode.width, rule.mode.height, rule.mode.refreshRate)
+      modeW = rule.mode.width
+      modeH = rule.mode.height
+      modeHz = rule.mode.refreshRate
     end
     if rule.scale ~= nil then
-      setScale(entry.name, rule.scale)
+      scale = rule.scale
     end
   end
+  adapter.setOutputConfig(entry.name, entry, modeW, modeH, modeHz, scale, nil, nil)
+  -- Return updated entry so callers can use the resolved values.
+  if modeW ~= nil then entry.currentModeWidth = modeW; entry.currentModeHeight = modeH; entry.currentModeRefreshRate = modeHz end
+  if scale ~= nil then entry.scale = scale end
+  return entry
 end
 
 local function applyLayout()
@@ -269,12 +499,12 @@ local function applyLayout()
       -- Keep only the primary on; disable everything else.
       for _, entry in ipairs(list) do
         if entry.name == primary then
-          setOutputEnabled(entry.name, true)
+          adapter.setOutputEnabled(entry.name, true)
           applyModeAndScale(entry)
-          setPosition(entry.name, 0, 0)
+          adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
           entry.x = 0; entry.y = 0
         else
-          setOutputEnabled(entry.name, false)
+          adapter.setOutputEnabled(entry.name, false)
           entry.enabled = false
         end
       end
@@ -284,13 +514,13 @@ local function applyLayout()
       local placedFirst = false
       for _, entry in ipairs(list) do
         if entry.name == primary then
-          setOutputEnabled(entry.name, false)
+          adapter.setOutputEnabled(entry.name, false)
           entry.enabled = false
         else
-          setOutputEnabled(entry.name, true)
+          adapter.setOutputEnabled(entry.name, true)
           applyModeAndScale(entry)
           if not placedFirst then
-            setPosition(entry.name, 0, 0)
+            adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
             entry.x = 0; entry.y = 0
             placedFirst = true
           end
@@ -300,22 +530,23 @@ local function applyLayout()
     else -- "extend" (default)
       -- Enable everything and arrange per direction rules.
       for _, entry in ipairs(list) do
-        setOutputEnabled(entry.name, true)
+        adapter.setOutputEnabled(entry.name, true)
         applyModeAndScale(entry)
       end
       local primaryOut = primary ~= nil and findOutput(list, primary) or nil
       if primaryOut ~= nil then
-        setPosition(primaryOut.name, 0, 0)
+        adapter.setOutputConfig(primaryOut.name, primaryOut, nil, nil, nil, nil, 0, 0)
         primaryOut.x = 0; primaryOut.y = 0
         for _, entry in ipairs(list) do
           -- Skip outputs that were disabled before this apply; their geometry
-          -- is 0×0 until niri confirms the re-enable. The next update() tick
-          -- will reposition them correctly once they have valid dimensions.
+          -- is 0x0 until the compositor confirms the re-enable. The next
+          -- update() tick will reposition them correctly once they have valid
+          -- dimensions.
           if entry.name ~= primary and entry.enabled then
             local rule = rules[entry.name]
             if rule ~= nil and rule.direction ~= nil then
               local x, y = targetFor(entry, primaryOut, rule)
-              setPosition(entry.name, x, y)
+              adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, x, y)
               entry.x = x; entry.y = y
             end
           end
@@ -379,7 +610,7 @@ function publish(list)
     if o.enabled then
       local rule = rules[o.name]
       -- Use rule values as optimistic overrides so the panel reflects a
-      -- just-applied change before niri confirms it on the next fetch.
+      -- just-applied change before the compositor confirms it on the next fetch.
       local displayScale = (rule and rule.scale) or o.scale
       local displayModeW  = (rule and rule.mode and rule.mode.width)        or o.currentModeWidth
       local displayModeH  = (rule and rule.mode and rule.mode.height)       or o.currentModeHeight

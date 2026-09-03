@@ -17,8 +17,8 @@ author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "device-desktop"
 description = "Arrange connected displays relative to each other - left, right, above, below - and keep the layout applied."
-tags        = ["display", "monitor", "niri", "system", "utility"]
-dependencies = ["niri"]
+tags        = ["display", "monitor", "niri", "hyprland", "system", "utility"]
+dependencies = ["niri", "hyprland"]
 
 [[widget]]
 id    = "bar"
