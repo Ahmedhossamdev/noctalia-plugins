@@ -45,9 +45,9 @@ noctalia.setUpdateInterval(userIntervalMs)
 -- Compositor detection
 -- ---------------------------------------------------------------------
 local compositor = "unknown"
-if os.getenv("HYPRLAND_INSTANCE_SIGNATURE") ~= nil then
+if noctalia.getenv("HYPRLAND_INSTANCE_SIGNATURE") ~= nil then
   compositor = "hyprland"
-elseif os.getenv("NIRI_SOCKET") ~= nil then
+elseif noctalia.getenv("NIRI_SOCKET") ~= nil then
   compositor = "niri"
 end
 
