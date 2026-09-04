@@ -91,7 +91,7 @@ end
 local function serializeMd()
   local parts = {}
   for i, n in ipairs(notes) do
-    local meta = noctalia.json.encode({ id = n.id, color = n.color, createdAt = n.createdAt })
+    local meta = noctalia.json.encode({ id = n.id, color = n.color, createdAt = n.createdAt, pinned = n.pinned == true })
     table.insert(parts, string.format(
       "## Note %d\n\n<!-- sticky-notes %s -->\n\n%s\n",
       i,
@@ -107,8 +107,8 @@ local function serializeTxt()
   local parts = {}
   for i, n in ipairs(notes) do
     table.insert(parts, string.format(
-      "[Note %d | id:%s color:%s]\n%s",
-      i, n.id, n.color, n.content or ""
+      "[Note %d | id:%s color:%s pinned:%s]\n%s",
+      i, n.id, n.color, n.pinned == true and "true" or "false", n.content or ""
     ))
   end
   local header = blurred and "[blurred:true]\n\n" or ""
@@ -147,6 +147,7 @@ local function parseMd(raw)
         content   = noctalia.string.trim(body),
         color     = type(meta.color) == "string" and meta.color or "yellow",
         createdAt = type(meta.createdAt) == "number" and meta.createdAt or 0,
+        pinned    = meta.pinned == true,
       })
     end
   end
@@ -165,6 +166,7 @@ local function parseMd(raw)
           content   = noctalia.string.trim(lastBody),
           color     = type(meta.color) == "string" and meta.color or "yellow",
           createdAt = type(meta.createdAt) == "number" and meta.createdAt or 0,
+          pinned    = meta.pinned == true,
         })
       end
     end
@@ -173,31 +175,42 @@ end
 
 local function parseTxt(raw)
   if raw:match("%[blurred:true%]") then blurred = true end
-  for header, body in raw:gmatch("%[Note %d+ | id:([%w_]+) color:([%a]+)%]\n(.-)\n%-%-%- ") do
-    -- header = id, body via captures below
-  end
-  -- Better: iterate section by section
-  for sectionId, sectionColor, sectionBody in raw:gmatch(
-    "%[Note %d+ | id:([%w]+) color:([%a]+)%]\n(.-)\n\n%-%-%-%\n"
-  ) do
+  local function insertTxt(id, color, pinnedStr, body)
     table.insert(notes, {
-      id        = sectionId,
-      content   = noctalia.string.trim(sectionBody),
-      color     = sectionColor,
+      id        = id,
+      content   = noctalia.string.trim(body),
+      color     = color,
       createdAt = 0,
+      pinned    = pinnedStr == "true",
     })
   end
+  -- New format with pinned flag.
+  for sectionId, sectionColor, sectionPinned, sectionBody in raw:gmatch(
+    "%[Note %d+ | id:([%w_]+) color:([%a]+) pinned:(%a+)%]\n(.-)\n\n%-%-%-%\n"
+  ) do
+    insertTxt(sectionId, sectionColor, sectionPinned, sectionBody)
+  end
   if #notes == 0 then
-    -- Fallback: try simpler split (last section has no trailing ---)
+    -- Legacy format without pinned flag (defaults to unpinned).
     for sectionId, sectionColor, sectionBody in raw:gmatch(
-      "%[Note %d+ | id:([%w]+) color:([%a]+)%]\n(.*)"
+      "%[Note %d+ | id:([%w_]+) color:([%a]+)%]\n(.-)\n\n%-%-%-%\n"
     ) do
-      table.insert(notes, {
-        id      = sectionId,
-        content = noctalia.string.trim(sectionBody),
-        color   = sectionColor,
-        createdAt = 0,
-      })
+      insertTxt(sectionId, sectionColor, "false", sectionBody)
+    end
+  end
+  if #notes == 0 then
+    -- Fallback: last (or only) section has no trailing ---.
+    for sectionId, sectionColor, sectionPinned, sectionBody in raw:gmatch(
+      "%[Note %d+ | id:([%w_]+) color:([%a]+) pinned:(%a+)%]\n(.*)"
+    ) do
+      insertTxt(sectionId, sectionColor, sectionPinned, sectionBody)
+    end
+  end
+  if #notes == 0 then
+    for sectionId, sectionColor, sectionBody in raw:gmatch(
+      "%[Note %d+ | id:([%w_]+) color:([%a]+)%]\n(.*)"
+    ) do
+      insertTxt(sectionId, sectionColor, "false", sectionBody)
     end
   end
 end
