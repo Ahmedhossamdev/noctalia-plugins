@@ -6,6 +6,8 @@
     "empty": "No notes yet. Add one to get started.",
     "loading": "Loading notes…",
     "empty-preview": "Empty note…",
+    "untitled-task": "Untitled task",
+    "more-tasks": "+{count} more tasks",
     "add-first": "Add your first note",
     "add": "Add note",
     "add-disabled": "Finish the empty note first",

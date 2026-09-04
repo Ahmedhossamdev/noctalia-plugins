@@ -27,6 +27,9 @@ API).
   - **Drag to arrange** — grab a note by its `≡` handle and drop it onto
     the thin line between cards to reorder within its group, or drop it
     into the other group's zone to pin/unpin in one gesture.
+  - **Interactive checklists** — use standard Markdown task lines such as
+    `- [ ] Buy milk` and `- [x] Send the report`. Toggle tasks directly from
+    the note card and see each checklist's completion count at a glance.
   - **Blur mode** — one-tap privacy toggle that hides every note behind a
     blur overlay (light / medium / heavy strengths, configurable).
   - **Auto-blur on open** (optional) — re-blurs the panel every time it
@@ -86,6 +89,19 @@ outside Noctalia.
 The Markdown format uses one `## Note N` section per note with a hidden
 metadata comment carrying the note id, color, and timestamps. Editing the
 file by hand is safe as long as the metadata comments are preserved.
+
+### Checklists
+
+Write tasks using Markdown's portable task-list syntax:
+
+```md
+- [ ] Buy milk
+- [x] Send the report
+```
+
+The plugin detects these lines automatically. Toggling a task from the note
+list edits only its `[ ]` / `[x]` marker, so the same checklist remains valid
+in Markdown, plain-text, and JSON exports.
 
 ## Notes
 

@@ -16,12 +16,12 @@ tags        = ["clock", "time", "timezone", "utility"]
 [[plugin]]
 id          = "ahmedhossamdev/sticky-notes"
 name        = "Sticky Notes"
-version     = "1.0.0"
+version     = "1.1.0"
 plugin_api  = 24
 author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "note"
-description = "Create and manage colorful sticky notes from your bar. Supports multiple notes, per-note color selection, and a privacy blur mode."
+description = "Create colorful sticky notes and interactive checklists from your bar, with pinning, privacy blur, and portable file storage."
 tags        = ["notes", "productivity", "utility"]
 
 [[plugin]]

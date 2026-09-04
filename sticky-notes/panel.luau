@@ -101,6 +101,47 @@ local function sendCmd(cmd)
   noctalia.state.set("sticky_notes.cmd", cmd)
 end
 
+-- Markdown task-list lines stay ordinary note text, so they remain useful in
+-- exported .md/.txt files and editable outside the plugin. The panel adds a
+-- lightweight interactive view for the common `- [ ] task` form.
+local function checklistTasks(content)
+  local tasks = {}
+  local lineNumber = 0
+  for line in ((content or "") .. "\n"):gmatch("(.-)\n") do
+    lineNumber += 1
+    local state, text = line:match("^%s*[%-%*+]%s+%[([ xX])%]%s*(.*)$")
+    if state ~= nil then
+      table.insert(tasks, {
+        line = lineNumber,
+        done = state == "x" or state == "X",
+        text = text ~= "" and text or noctalia.tr("panel.untitled-task"),
+      })
+    end
+  end
+  return tasks
+end
+
+local function setChecklistTask(content, targetLine, done)
+  local lines = {}
+  local lineNumber = 0
+  for line in ((content or "") .. "\n"):gmatch("(.-)\n") do
+    lineNumber += 1
+    if lineNumber == targetLine then
+      local before, _state, after = line:match("^(%s*[%-%*+]%s+%[)([ xX])(%].*)$")
+      if before ~= nil then line = before .. (done and "x" or " ") .. after end
+    end
+    table.insert(lines, line)
+  end
+  return table.concat(lines, "\n")
+end
+
+local function updateChecklistTask(note, task, done)
+  local content = setChecklistTask(note.content or "", task.line, done)
+  if content ~= note.content then
+    sendCmd({ op = "update", id = note.id, content = content })
+  end
+end
+
 -- Persist the local input draft without forcing a render. This is shared by
 -- Done/Back and onClose, so closing the panel cannot lose a long-note edit.
 local function saveEditingDraft()
@@ -237,10 +278,50 @@ local function notePreviewCard(note)
   local dateText = formatDate(note.createdAt)
   local isPinned = note.pinned == true
   local webLink = firstWebLink(note.content)
+  local tasks = checklistTasks(note.content)
+  local completedTasks = 0
+  for _, task in ipairs(tasks) do
+    if task.done then completedTasks += 1 end
+  end
 
   local body
   if blurred then
     body = blurOverlay()
+  elseif #tasks > 0 then
+    local taskRows = {}
+    for index, task in ipairs(tasks) do
+      if index > 3 then break end
+      table.insert(taskRows, ui.row({ gap = 6, align = "center" }, {
+        -- ui.toggle is rendered as a wide on/off switch by the shell. A
+        -- compact outlined button reads as a familiar task checkbox instead.
+        ui.button({
+          text = task.done and "✓" or "",
+          variant = "outline",
+          width = 24,
+          height = 24,
+          onClick = function()
+            updateChecklistTask(note, task, not task.done)
+          end,
+        }),
+        ui.label({
+          text = task.text, fontSize = fontSize, color = NOTE_TEXT_COLOR,
+          maxLines = 1,
+        }),
+      }))
+    end
+    if #tasks > 3 then
+      local moreTasks = noctalia.tr("panel.more-tasks", { count = #tasks - 3 })
+      -- Translation bundles reload with the plugin rather than its Luau
+      -- script. Do not expose the key while a developer hot-reloads this file.
+      if moreTasks == "panel.more-tasks" then
+        moreTasks = "+" .. tostring(#tasks - 3) .. " more tasks"
+      end
+      table.insert(taskRows, ui.label({
+        text = moreTasks,
+        fontSize = 11, color = NOTE_TEXT_COLOR,
+      }))
+    end
+    body = ui.column({ gap = 2, align = "stretch" }, taskRows)
   else
     local preview = previewText(note.content, fontSize)
     body = ui.label({
@@ -304,6 +385,10 @@ local function notePreviewCard(note)
           ui.glyph({ name = "menu-2", size = 12, color = NOTE_TEXT_COLOR }),
         }),
         ui.label({ text = dateText, fontSize = 10, color = NOTE_TEXT_COLOR }),
+        #tasks > 0 and ui.label({
+          text = completedTasks .. "/" .. #tasks,
+          fontSize = 10, color = NOTE_TEXT_COLOR,
+        }) or ui.row({}, {}),
       }),
       ui.row({ gap = 4, align = "center" }, {
         webLink ~= nil and ui.button({
