@@ -1,115 +1,65 @@
 # Sticky Notes
 
-Quick, colourful sticky notes right from your bar — for
-[Noctalia Shell](https://github.com/noctalia-dev/noctalia) v5 (Luau plugin
-API).
+Create colourful, persistent notes and Markdown checklists from the Noctalia
+bar. Pin, reorder, blur, and save them in a folder you control.
 
-## Features
+## Plugin
 
-- **Bar widget** — note icon with a live count badge; click to open the
-  panel. The count is hidden while blur mode is on.
-  - **Panel** — scrollable list of notes, each rendered as a coloured card
-    with a preview of its content and its creation time.
-    Saved notes are loaded before the add action becomes available, so opening
-    the panel cannot briefly present an empty list.
-  - **Multiple notes** with per-note color selection from a 7-swatch palette
-    (yellow, pink, red, blue, green, orange, purple). The current color is
-    marked with a primary-coloured ring around the swatch.
-  - **Full-screen edit view** — click a note preview (or its edit button) to
-    open the complete note in a selectable multiline input for quick copying
-    and pasting. The draft is saved when you leave or submit the editor, which
-    keeps scrolling stable in long notes. Empty notes are auto-deleted when
-    you leave the editor, so the list never fills up with blanks.
-  - **Web links** — notes containing an `http://`, `https://`, or `www.`
-    address show an external-link button. Click it to open the link in your
-    default browser.
-  - **Pin notes** — starred notes float to the top of the list.
-  - **Drag to arrange** — grab a note by its `≡` handle and drop it onto
-    the thin line between cards to reorder within its group, or drop it
-    into the other group's zone to pin/unpin in one gesture.
-  - **Interactive checklists** — use standard Markdown task lines such as
-    `- [ ] Buy milk` and `- [x] Send the report`. Toggle tasks directly from
-    the note card and see each checklist's completion count at a glance.
-  - **Blur mode** — one-tap privacy toggle that hides every note behind a
-    blur overlay (light / medium / heavy strengths, configurable).
-  - **Auto-blur on open** (optional) — re-blurs the panel every time it
-    opens, so a shoulder-surfer doesn't see your notes.
-- **Ctrl+Enter** in the editor saves and closes the current note (same as
-  the Done button). The shortcut can be turned off in settings.
+| Field | Value |
+| --- | --- |
+| ID | `ahmedhossamdev/sticky-notes` |
+| Entries | Bar widget: `bar`; panel: `panel`; service: `service` |
 
-## Installation
+## Requirements
 
-### Option A — add this repo as a plugin source (recommended)
+The plugin uses the standard `mkdir` and `sh` commands to create and resolve
+the save folder, and `xdg-open` to open a web link explicitly stored in a note.
 
-1. Open Settings (`Super`+`,`) → Plugins → **Sources**
-2. Add source: `https://github.com/Ahmedhossamdev/noctalia-plugins`
-3. Go to **Available**, find **Sticky Notes**, install it
-4. Go to **Installed**, enable it
-5. Go to Bar → add the widget to a section
+## Usage
 
-### Option B — manual copy
+1. Enable **Sticky Notes** in Settings → Plugins.
+2. Add the `bar` widget to a bar section.
+3. Click its note icon to open the panel, then use **+** to create a note.
+4. Click a note to edit it. **Done** saves it; an empty note is deleted.
+5. Use the star to pin a note, and drag its `≡` handle to reorder it.
 
-```bash
-mkdir -p ~/.config/noctalia/plugins
-cp -r sticky-notes ~/.config/noctalia/plugins/
-```
-
-Reload Noctalia's config (`noctalia msg config-reload`, or restart it),
-then in Settings → Plugins → **Installed**, enable **Sticky Notes** and
-add its widget from the Bar tab.
-
-## IPC
+Open or close the panel directly:
 
 ```sh
-# Open the panel
 noctalia msg panel-toggle ahmedhossamdev/sticky-notes:panel
 ```
 
-## Settings
-
-| Setting | Default | Description |
-| --- | --- | --- |
-| Default note color | Yellow | Color used for newly created notes. |
-| Note font size | 13 | Font size (10–20) for note previews and the editor. |
-| Show note count in bar | on | Show the count badge next to the bar icon. |
-| Auto-blur on open | off | Re-blur every time the panel opens. |
-| Blur strength | Medium | Light / Medium / Heavy — visual weight of the blur overlay. |
-| Save with Ctrl+Enter | on | Enable Ctrl+Enter in the editor to save and close. |
-| Notes save folder | `~/Documents/sticky-notes` | Where notes are saved. `~` is expanded. |
-| Save file format | Markdown (.md) | `md`, `txt`, or `json`. |
-
-## Storage
-
-Notes are saved as a single file inside the save folder, named after the
-chosen format (`notes.md`, `notes.txt`, or `notes.json`). The default
-folder is `~/Documents/sticky-notes` — a user-readable location, not the
-opaque `pluginDataDir()` — so you can back up, sync, or read the file
-outside Noctalia.
-
-The Markdown format uses one `## Note N` section per note with a hidden
-metadata comment carrying the note id, color, and timestamps. Editing the
-file by hand is safe as long as the metadata comments are preserved.
-
 ### Checklists
 
-Write tasks using Markdown's portable task-list syntax:
+Use standard Markdown task-list syntax. Up to three tasks appear as clickable
+checkboxes on a note card, with a completion count beside its timestamp.
 
 ```md
 - [ ] Buy milk
 - [x] Send the report
 ```
 
-The plugin detects these lines automatically. Toggling a task from the note
-list edits only its `[ ]` / `[x]` marker, so the same checklist remains valid
-in Markdown, plain-text, and JSON exports.
+## Settings
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `default_color` | select | `yellow` | Colour assigned to a new note. |
+| `font_size` | int | `13` | Preview and editor text size, from 10 to 20 px. |
+| `show_count` | bool | `true` | Shows the number of notes beside the bar icon. |
+| `auto_blur` | bool | `false` | Hides note contents whenever the panel opens. |
+| `save_shortcut` | bool | `true` | Enables Ctrl+Enter to save and close the editor. |
+| `blur_strength` | select | `medium` | Visual weight of the privacy overlay. |
+| `save_path` | string | `~/Documents/sticky-notes` | Folder where the notes file is stored. |
+| `file_format` | select | `md` | Storage format: Markdown, plain text, or JSON. |
 
 ## Notes
 
-- Requires `plugin_api = 24` (declarative `ui.*` panel, `state.watch`
-  pub/sub, `writeFile`/`readFile`, drag & drop, and Luau).
-- Note previews use a high-contrast dark foreground, compact to their content,
-  and show at most four lines. Long content is shortened with an ellipsis;
-  click the card to view and select the complete note.
-- The color palette is intentionally small (7 pastels + medium red +
-  orange) rather than a full color wheel — sticky notes work best when
-  colors are meaningfully distinct.
+- Notes are stored in `notes.md`, `notes.txt`, or `notes.json` in the selected
+  save folder. The plugin creates that folder when needed and writes only that
+  file.
+- The Markdown file includes note metadata in HTML comments; preserve those
+  comments if you edit the file outside Noctalia.
+- Blur mode hides every preview and disables opening note links until you
+  reveal the notes again.
+- The plugin has no network calls. It only invokes `xdg-open` for a validated
+  `http://`, `https://`, or `www.` link that the user placed in a note.

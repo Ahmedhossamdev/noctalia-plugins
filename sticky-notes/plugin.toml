@@ -5,8 +5,9 @@ plugin_api  = 24
 author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "note"
-description = "Create colorful sticky notes and interactive checklists from your bar, with pinning, privacy blur, and portable file storage."
-tags        = ["notes", "productivity", "utility"]
+description = "Colorful sticky notes and interactive checklists from your bar, with pinning, privacy blur, and portable storage."
+tags        = ["bar", "panel", "service", "privacy", "productivity", "utility"]
+dependencies = ["mkdir", "sh", "xdg-open"]
 
 [[widget]]
 id    = "bar"
