@@ -393,9 +393,31 @@ end
 -- -------------------------------------------------------------------------
 -- Edit view — coloured card (fill) + footer outside the card.
 -- -------------------------------------------------------------------------
+-- Multiline inputs have their own wheel handler. Give the input enough height
+-- for all of its text and let a regular ui.scroll own the viewport instead.
+-- Apart from producing smoother scrolling, this avoids the input viewport
+-- jumping back toward its caret while reading a long note.
+local function editorContentHeight(content, fontSize)
+  local charsPerLine = math.max(12, math.floor(320 / fontSize))
+  local visualLines = 0
+  local startAt = 1
+
+  while true do
+    local newlineAt = content:find("\n", startAt, true)
+    local endAt = newlineAt ~= nil and newlineAt - 1 or #content
+    local lineLength = math.max(0, endAt - startAt + 1)
+    visualLines += math.max(1, math.ceil(lineLength / charsPerLine))
+    if newlineAt == nil then break end
+    startAt = newlineAt + 1
+  end
+
+  return math.max(300, math.ceil(visualLines * fontSize * 1.6 + 24))
+end
+
 local function editView(note)
   local hex = colorHex(note.color)
   local fontSize = noctalia.getConfig("font_size") or 13
+  local content = editingContent or note.content or ""
 
   local card = ui.column({
     flexGrow = 1, fill = hex, radius = 8, padding = 10, gap = 6,
@@ -403,24 +425,30 @@ local function editView(note)
   }, {
     colorPicker(note),
     ui.separator({}),
-    ui.input({
-      key           = "inp-" .. note.id .. "-" .. tostring(editKey),
-      value         = editingContent or note.content,
-      placeholder   = noctalia.tr("panel.placeholder"),
-      multiline     = true,
-      flexGrow      = 1,
-      fontSize      = fontSize,
-      -- On a multiline input Qt fires the submit signal for Ctrl+Enter;
-      -- plain Enter keeps inserting newlines. The handler still gates on
-      -- the save_shortcut setting so the user can disable it.
-      submitOnEnter = true,
-      onSubmit      = "onEditSubmit",
-      onChange      = function(value)
-        -- ui.input owns its current text. Keeping the draft local avoids a
-        -- full panel re-render after every keystroke, which preserves scroll.
-        editingContent = value
-      end,
-      focus         = true,
+    ui.scroll({ flexGrow = 1, align = "stretch", justify = "start" }, {
+      -- Put the content height on a wrapper instead of the input itself. An
+      -- explicit input height also scales its native frame, producing a huge
+      -- corner radius; flex-growing inside this wrapper keeps normal styling.
+      ui.column({ height = editorContentHeight(content, fontSize), align = "stretch" }, {
+        ui.input({
+          key           = "inp-" .. note.id .. "-" .. tostring(editKey),
+          value         = content,
+          placeholder   = noctalia.tr("panel.placeholder"),
+          multiline     = true,
+          flexGrow      = 1,
+          fontSize      = fontSize,
+          -- On a multiline input Qt fires the submit signal for Ctrl+Enter;
+          -- plain Enter keeps inserting newlines. The handler still gates on
+          -- the save_shortcut setting so the user can disable it.
+          submitOnEnter = true,
+          onSubmit      = "onEditSubmit",
+          onChange      = function(value)
+            -- ui.input owns its current text. Keeping the draft local avoids a
+            -- full panel re-render after every keystroke, which preserves scroll.
+            editingContent = value
+          end,
+        }),
+      }),
     }),
   })
 
