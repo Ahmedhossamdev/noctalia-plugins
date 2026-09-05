@@ -27,10 +27,10 @@ tags        = ["bar", "panel", "service", "privacy", "productivity", "utility"]
 [[plugin]]
 id          = "ahmedhossamdev/display-arrange"
 name        = "Display Arrange"
-version     = "1.0.0"
+version     = "1.1.0"
 plugin_api  = 24
 author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "device-desktop"
-description = "Arrange connected displays relative to each other - left, right, above, below - and keep the layout applied."
+description = "Arrange connected displays relative to each other - left, right, above, below - with rotation, and keep the layout applied."
 tags        = ["display", "monitor", "niri", "system", "utility"]

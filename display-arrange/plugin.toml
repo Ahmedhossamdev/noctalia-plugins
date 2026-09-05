@@ -1,24 +1,29 @@
 # Display Arrange — pick where each connected monitor sits relative to the
-# primary one (left/right/above/below), and keep that layout applied.
+# primary one (left/right/above/below), rotate it (Landscape / Portrait /
+# flipped), and keep that layout applied.
 #
-# niri only ever accepts output-position changes at runtime via
-# `niri msg output <name> position set <x> <y>` and explicitly does not
-# persist them into config.kdl (a restart or config reload forgets them).
-# This plugin doesn't touch config.kdl either — instead its service just
+# niri only ever accepts output changes at runtime via
+# `niri msg output <name> position set <x> <y>` /
+# `niri msg output <name> transform <normal|90|180|270|...>` and explicitly
+# does not persist them into config.kdl (a restart or config reload forgets
+# them). Hyprland likewise treats `hyprctl keyword monitor ...` changes as
+# temporary (`<name>,<mode>,<scale>,<offset>` plus a follow-up
+# `<name>,transform,<0-7>` for rotation).
+# This plugin doesn't touch config files either — instead its service just
 # re-applies the saved layout every time it starts and whenever the set of
 # connected outputs changes, which covers normal login/hotplug persistence
-# without editing the user's niri config.
+# without editing the user's compositor config.
 
 id          = "ahmedhossamdev/display-arrange"
 name        = "Display Arrange"
-version     = "1.0.0"
+version     = "1.1.0"
 plugin_api  = 24
 author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "device-desktop"
-description = "Arrange connected displays relative to each other - left, right, above, below - and keep the layout applied."
-tags        = ["display", "monitor", "niri", "system", "utility"]
-dependencies = ["niri"]
+description = "Arrange connected displays relative to each other - left, right, above, below - with rotation, and keep the layout applied."
+tags        = ["display", "monitor", "niri", "hyprland", "system", "utility"]
+dependencies = ["niri", "hyprland"]
 
 [[widget]]
 id    = "bar"
