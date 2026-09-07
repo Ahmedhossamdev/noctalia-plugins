@@ -45,8 +45,8 @@
   },
   "settings": {
     "refresh-interval": "Refresh interval (seconds)",
-    "refresh-interval-desc": "How often to poll the compositor for connected-output changes",
-    "auto-reapply": "Re-apply layout on hotplug",
-    "auto-reapply-desc": "Automatically re-apply the saved arrangement whenever the set of connected displays changes"
+    "refresh-interval-desc": "How often to check connected displays and verify the live layout",
+    "auto-reapply": "Keep saved layout applied",
+    "auto-reapply-desc": "Re-apply the saved arrangement after hotplug or when the compositor's live layout drifts from it"
   }
 }

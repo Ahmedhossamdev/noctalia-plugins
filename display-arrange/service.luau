@@ -707,6 +707,104 @@ local function applyLayout(reapplyOutputSettings)
   end)
 end
 
+-- Check the compositor's live state instead of assuming that a successful
+-- startup apply remains in effect. During login, niri may finish loading its
+-- config after this service starts and overwrite the saved plugin position.
+local function outputSettingsMatch(entry)
+  local rule = rules[entry.name]
+  if rule == nil then
+    return true
+  end
+  if rule.scale ~= nil and math.abs((entry.scale or 1) - rule.scale) > 0.001 then
+    return false
+  end
+  if rule.transform ~= nil and normalizeTransform(entry.transform) ~= normalizeTransform(rule.transform) then
+    return false
+  end
+  if rule.mode ~= nil then
+    if entry.currentModeWidth ~= rule.mode.width or entry.currentModeHeight ~= rule.mode.height then
+      return false
+    end
+    if entry.currentModeRefreshRate ~= rule.mode.refreshRate then
+      return false
+    end
+  end
+  return true
+end
+
+local function layoutMatchesSavedState(list)
+  local primaryOut = primary ~= nil and findOutput(list, primary) or nil
+  if primaryOut == nil then
+    return false
+  end
+
+  if displayMode == "primary-only" then
+    for _, entry in ipairs(list) do
+      if entry.name == primary then
+        if not entry.enabled or entry.x ~= 0 or entry.y ~= 0 or not outputSettingsMatch(entry) then
+          return false
+        end
+      elseif entry.enabled then
+        return false
+      end
+    end
+    return true
+  end
+
+  if displayMode == "second-only" then
+    local foundSecond = false
+    for _, entry in ipairs(list) do
+      if entry.name == primary then
+        if entry.enabled then
+          return false
+        end
+      else
+        if not entry.enabled or not outputSettingsMatch(entry) then
+          return false
+        end
+        if not foundSecond then
+          if entry.x ~= 0 or entry.y ~= 0 then
+            return false
+          end
+          foundSecond = true
+        end
+      end
+    end
+    return foundSecond
+  end
+
+  -- Extend mode: all outputs are enabled, the selected primary is anchored at
+  -- the origin, and each saved direction is interpreted relative to it.
+  for _, entry in ipairs(list) do
+    if not entry.enabled or not outputSettingsMatch(entry) then
+      return false
+    end
+  end
+  if primaryOut.x ~= 0 or primaryOut.y ~= 0 then
+    return false
+  end
+  for _, entry in ipairs(list) do
+    if entry.name ~= primary then
+      local rule = rules[entry.name]
+      local direction = rule ~= nil and rule.direction or nil
+      local wantX, wantY = nil, nil
+      if direction == "left" then
+        wantX, wantY = -entry.width, 0
+      elseif direction == "right" then
+        wantX, wantY = primaryOut.width, 0
+      elseif direction == "top" then
+        wantX, wantY = 0, -entry.height
+      elseif direction == "bottom" then
+        wantX, wantY = 0, primaryOut.height
+      end
+      if wantX ~= nil and (entry.x ~= wantX or entry.y ~= wantY) then
+        return false
+      end
+    end
+  end
+  return true
+end
+
 -- ---------------------------------------------------------------------
 -- Pending-change confirmation
 -- ---------------------------------------------------------------------
@@ -961,16 +1059,15 @@ function update()
       -- lets a remembered direction apply after a monitor becomes ready.
       connectedKey = connectedKey .. o.name .. ":" .. tostring(o.enabled) .. ";"
     end
-    if connectedKey ~= lastConnectedKey then
-      local autoReapply = noctalia.getConfig("auto_reapply")
-      if autoReapply == nil then
-        autoReapply = true
-      end
-      if autoReapply then
-        ensureDefaultPrimary(list)
-        applyLayout()
-        return
-      end
+    local autoReapply = noctalia.getConfig("auto_reapply")
+    if autoReapply == nil then
+      autoReapply = true
+    end
+    if autoReapply and (connectedKey ~= lastConnectedKey or not layoutMatchesSavedState(list)) then
+      noctalia.log("DisplayArrange: live output state differs from saved layout; reapplying")
+      ensureDefaultPrimary(list)
+      applyLayout()
+      return
     end
     publish(list)
   end)
