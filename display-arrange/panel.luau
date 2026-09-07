@@ -6,7 +6,6 @@
 
 local outputs = {}
 local primary = ""
-local pendingSeconds = 0 -- countdown pushed live by the service; 0 = nothing pending
 local displayMode = "extend"
 
 local MODE_OPTIONS = {
@@ -305,6 +304,9 @@ local function outputCard(row)
       variant = "ghost",
       selected = i == scaleIdx,
       controlSize = "sm",
+      -- Keep the eight-option scale picker compact; selection should not make
+      -- the whole row as tall as a normal text button.
+      height = 28,
       fontSize = 9,
       flexGrow = 1,
       onClick = function()
@@ -359,16 +361,24 @@ local function outputCard(row)
 
   if not row.isPrimary then
     table.insert(cardChildren, ui.separator({}))
-    table.insert(cardChildren, ui.row({ gap = 10, align = "center", justify = "start" }, {
+    table.insert(cardChildren, ui.row({ gap = 14, align = "center", justify = "start" }, {
       directionPad(row),
-      ui.column({ gap = 4, justify = "start", flexGrow = 1 }, {
-        ui.label({ text = noctalia.tr("row.direction-hint"), fontSize = 9, color = "on_surface_variant" }),
+      ui.column({ gap = 6, align = "center", justify = "center", flexGrow = 1 }, {
+        ui.label({
+          text = noctalia.tr("row.direction-hint"),
+          fontSize = 9,
+          color = "on_surface_variant",
+          textAlign = "center",
+        }),
         ui.button({
           glyph = "star",
           text = noctalia.tr("row.make-primary-short"),
-          variant = "ghost",
+          variant = "outline",
           controlSize = "sm",
-          contentAlign = "start",
+          width = 144,
+          height = 30,
+          fontSize = 10,
+          contentAlign = "center",
           tooltip = noctalia.tr("row.make-primary"),
           onClick = function()
             noctalia.state.set("display_arrange.cmd", { op = "set_primary", name = row.name })
@@ -432,52 +442,6 @@ local function displayModeBar()
 end
 
 -- ---------------------------------------------------------------------
--- Confirm banner
--- ---------------------------------------------------------------------
-local function confirmBanner()
-  if pendingSeconds <= 0 then
-    return nil
-  end
-  return ui.column({
-    key = "confirm-banner",
-    gap = 6,
-    justify = "start",
-    padding = 10,
-    fill = "primary/0.14",
-    radius = 8,
-  }, {
-    ui.row({ gap = 8, align = "center", justify = "start" }, {
-      ui.glyph({ name = "clock", size = 16, color = "primary" }),
-      ui.label({
-        text = noctalia.tr("panel.confirm-text", { seconds = tostring(pendingSeconds) }),
-        fontSize = 11,
-        flexGrow = 1,
-      }),
-    }),
-    ui.row({ gap = 6, align = "center", justify = "start" }, {
-      ui.spacer({ flexGrow = 1 }),
-      ui.button({
-        glyph = "check",
-        text = noctalia.tr("panel.confirm-keep"),
-        variant = "outline",
-        controlSize = "sm",
-        onClick = function()
-          noctalia.state.set("display_arrange.cmd", { op = "confirm_layout" })
-        end,
-      }),
-      ui.button({
-        text = noctalia.tr("panel.confirm-revert"),
-        variant = "ghost",
-        controlSize = "sm",
-        onClick = function()
-          noctalia.state.set("display_arrange.cmd", { op = "revert_layout" })
-        end,
-      }),
-    }),
-  })
-end
-
--- ---------------------------------------------------------------------
 -- View
 -- ---------------------------------------------------------------------
 local function view()
@@ -503,11 +467,6 @@ local function view()
     }),
     ui.separator({}),
   }
-
-  local banner = confirmBanner()
-  if banner ~= nil then
-    table.insert(body, banner)
-  end
 
   if #outputs > 0 then
     table.insert(body, displayModeBar())
@@ -551,11 +510,6 @@ end)
 
 noctalia.state.watch("display_arrange.primary", function(value)
   primary = type(value) == "string" and value or ""
-  render()
-end)
-
-noctalia.state.watch("display_arrange.pending_seconds", function(value)
-  pendingSeconds = type(value) == "number" and value or 0
   render()
 end)
 

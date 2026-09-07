@@ -23,7 +23,6 @@
 --                                           currentModeRefreshRate }, ... }
 --   display_arrange.primary         -> string
 --   display_arrange.applying        -> bool
---   display_arrange.pending_deadline -> number (ms epoch; 0 = no pending change)
 -- Commands (display_arrange.cmd):
 --   { op = "set_primary", name = ... }
 --   { op = "set_direction", name = ..., direction = "left"|"right"|"top"|"bottom" }
@@ -31,13 +30,11 @@
 --   { op = "set_scale", name = ..., scale = 2.0 }
 --   { op = "set_transform", name = ..., transform = "normal"|"90"|"180"|"270" }
 --   { op = "clear_rule", name = ... }
---   { op = "confirm_layout" }  -- keep the pending change
---   { op = "revert_layout" }  -- undo the pending change now, instead of waiting
 --   { op = "refresh" }
 --
 -- Every set_primary/set_direction/set_mode/set_scale/set_transform starts
--- a 30s confirmation window: if not confirmed in time, the change is
--- undone automatically so a bad guess can't strand the user.
+-- a 30s desktop-notification confirmation window: if not confirmed in time,
+-- the change is undone automatically so a bad guess can't strand the user.
 
 local CONFIRM_WINDOW_MS = 30000
 
@@ -58,8 +55,19 @@ local primary = nil
 local rules = {} -- [name] = { direction = "left"|"right"|"top"|"bottom", transform = "normal"|... }
 local displayMode = "extend" -- "extend"|"duplicate"|"primary-only"|"second-only"
 local applying = false
+local applyGeneration = 0
 local lastConnectedKey = ""
 local pendingConfirm = nil -- { deadlineMs, prevPrimary, prevRules, prevMode }
+
+-- Translation files are reloaded with the plugin. Keep this safety net for a
+-- notification that is triggered before a newly added key has been loaded.
+local function trOr(key, fallback, args)
+  local ok, value = pcall(noctalia.tr, key, args)
+  if ok and type(value) == "string" and value ~= "" and value ~= key then
+    return value
+  end
+  return fallback
+end
 
 -- ---------------------------------------------------------------------
 -- Transform (orientation) — Windows-style: Landscape, Portrait,
@@ -552,6 +560,13 @@ local function targetFor(entry, primaryOut, rule)
   return entry.x, entry.y
 end
 
+local OPPOSITE_DIRECTION = {
+  left = "right",
+  right = "left",
+  top = "bottom",
+  bottom = "top",
+}
+
 local function applyModeAndScale(entry)
   local rule = rules[entry.name]
   local modeW, modeH, modeHz, scale
@@ -589,21 +604,38 @@ local function applyTransform(entry)
   return entry
 end
 
-local function applyLayout()
+local function applyLayout(reapplyOutputSettings)
+  if reapplyOutputSettings == nil then
+    reapplyOutputSettings = true
+  end
+  applyGeneration += 1
+  local generation = applyGeneration
   applying = true
   fetchOutputs(function(list)
+    -- A newer user action requested another layout while this compositor
+    -- query was running. Only the newest result may issue output commands.
+    if generation ~= applyGeneration then
+      return
+    end
     ensureDefaultPrimary(list)
 
     if displayMode == "primary-only" then
       -- Keep only the primary on; disable everything else.
       for _, entry in ipairs(list) do
         if entry.name == primary then
-          adapter.setOutputEnabled(entry.name, true)
-          applyTransform(entry)
-          applyModeAndScale(entry)
-          adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
-          entry.x = 0; entry.y = 0
-        else
+          if entry.enabled then
+            if reapplyOutputSettings then
+              applyTransform(entry)
+              applyModeAndScale(entry)
+            end
+            adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
+            entry.x = 0; entry.y = 0
+          else
+            -- Wait for the enabled-state refresh before sending commands that
+            -- need valid output geometry.
+            adapter.setOutputEnabled(entry.name, true)
+          end
+        elseif entry.enabled then
           adapter.setOutputEnabled(entry.name, false)
           entry.enabled = false
         end
@@ -614,16 +646,23 @@ local function applyLayout()
       local placedFirst = false
       for _, entry in ipairs(list) do
         if entry.name == primary then
-          adapter.setOutputEnabled(entry.name, false)
-          entry.enabled = false
+          if entry.enabled then
+            adapter.setOutputEnabled(entry.name, false)
+            entry.enabled = false
+          end
         else
-          adapter.setOutputEnabled(entry.name, true)
-          applyTransform(entry)
-          applyModeAndScale(entry)
-          if not placedFirst then
-            adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
-            entry.x = 0; entry.y = 0
-            placedFirst = true
+          if entry.enabled then
+            if reapplyOutputSettings then
+              applyTransform(entry)
+              applyModeAndScale(entry)
+            end
+            if not placedFirst then
+              adapter.setOutputConfig(entry.name, entry, nil, nil, nil, nil, 0, 0)
+              entry.x = 0; entry.y = 0
+              placedFirst = true
+            end
+          else
+            adapter.setOutputEnabled(entry.name, true)
           end
         end
       end
@@ -633,9 +672,14 @@ local function applyLayout()
       -- Transform first: 90/270 swaps logical width/height, which the
       -- position math below depends on.
       for _, entry in ipairs(list) do
-        adapter.setOutputEnabled(entry.name, true)
-        applyTransform(entry)
-        applyModeAndScale(entry)
+        if entry.enabled then
+          if reapplyOutputSettings then
+            applyTransform(entry)
+            applyModeAndScale(entry)
+          end
+        else
+          adapter.setOutputEnabled(entry.name, true)
+        end
       end
       local primaryOut = primary ~= nil and findOutput(list, primary) or nil
       if primaryOut ~= nil then
@@ -675,11 +719,64 @@ local function copyRules()
 end
 
 -- Snapshots the layout before a user-initiated change so it can be undone,
--- and switches to a 1s tick so the countdown/auto-revert are responsive
--- regardless of the configured (usually much slower) refresh interval.
+-- shows an actionable desktop notification, and switches to a 1s tick so the
+-- auto-revert is responsive regardless of the configured refresh interval.
 local function armConfirm()
-  pendingConfirm = { deadlineMs = noctalia.nowMs() + CONFIRM_WINDOW_MS, prevPrimary = primary, prevRules = copyRules(), prevMode = displayMode }
+  -- A user often changes resolution, scale, orientation, and position as one
+  -- operation. Keep the first snapshot and one notification for that entire
+  -- batch so clicking Keep cannot accidentally confirm an older change.
+  if pendingConfirm ~= nil then
+    return
+  end
+  local pending = {
+    deadlineMs = noctalia.nowMs() + CONFIRM_WINDOW_MS,
+    prevPrimary = primary,
+    prevRules = copyRules(),
+    prevMode = displayMode,
+  }
+  pendingConfirm = pending
   noctalia.setUpdateInterval(1000)
+  local seconds = tostring(CONFIRM_WINDOW_MS / 1000)
+  local appName = trOr("notification.app-name", "Display Layout")
+  local title = trOr("notification.title", "Keep display changes?")
+  local keep = trOr("notification.keep", "Keep")
+  local revert = trOr("notification.revert", "Revert")
+  local body = trOr(
+    "notification.body",
+    "Reverts in " .. seconds .. " seconds.",
+    { seconds = seconds }
+  )
+  noctalia.runAsync({
+    "notify-send",
+    "--app-name", appName,
+    "--icon", "device-desktop",
+    "--urgency", "critical",
+    "--expire-time", tostring(CONFIRM_WINDOW_MS),
+    "--action", "keep=" .. keep,
+    "--action", "revert=" .. revert,
+    title,
+    body,
+  }, function(result)
+    -- A previous notification may finish after a newer display change. Its
+    -- action must not affect the newer pending layout.
+    if pendingConfirm ~= pending then
+      noctalia.log("DisplayArrange: ignored action from an older confirmation")
+      return
+    end
+    local action = (result.stdout or ""):match("^%s*(%S+)")
+    noctalia.log(
+      "DisplayArrange: confirmation finished (action=" .. tostring(action)
+      .. ", exit=" .. tostring(result.exitCode)
+      .. ", timedOut=" .. tostring(result.timedOut) .. ")"
+    )
+    if action == "keep" or action == "revert" then
+      noctalia.state.set("display_arrange.cmd", { op = "notification_action", action = action })
+    else
+      -- notify-send either timed out or its notification was dismissed. Use
+      -- this as a second, independent safety net in addition to update().
+      noctalia.state.set("display_arrange.cmd", { op = "notification_action", action = "timeout" })
+    end
+  end, CONFIRM_WINDOW_MS + 1000)
 end
 
 local function clearConfirm()
@@ -687,7 +784,7 @@ local function clearConfirm()
   noctalia.setUpdateInterval(userIntervalMs)
 end
 
-local function revertPending()
+local function revertPending(notifyUser)
   if pendingConfirm == nil then
     return
   end
@@ -697,6 +794,12 @@ local function revertPending()
   clearConfirm()
   saveData()
   applyLayout()
+  if notifyUser then
+    noctalia.notify(
+      trOr("notification.app-name", "Display Layout"),
+      trOr("notification.reverted", "Unconfirmed display changes were reverted.")
+    )
+  end
 end
 
 -- ---------------------------------------------------------------------
@@ -706,9 +809,10 @@ function publish(list)
   local connectedKey = ""
   local outRows = {}
   for _, o in ipairs(list) do
-    -- connectedKey tracks ALL physically connected outputs (for hotplug
-    -- detection), regardless of whether we've enabled or disabled them.
-    connectedKey = connectedKey .. o.name .. ";"
+    -- Include enabled state too. A reconnect can first appear as a physically
+    -- connected but disabled output; its position cannot be set until the
+    -- compositor reports usable geometry on the following refresh.
+    connectedKey = connectedKey .. o.name .. ":" .. tostring(o.enabled) .. ";"
     -- Only send enabled outputs to the panel; disabled ones have no
     -- meaningful geometry to show and would confuse the UI.
     if o.enabled then
@@ -748,11 +852,6 @@ function publish(list)
   noctalia.state.set("display_arrange.primary", primary or "")
   noctalia.state.set("display_arrange.mode", displayMode)
   noctalia.state.set("display_arrange.applying", applying)
-  local pendingSeconds = 0
-  if pendingConfirm ~= nil then
-    pendingSeconds = math.max(0, math.ceil((pendingConfirm.deadlineMs - noctalia.nowMs()) / 1000))
-  end
-  noctalia.state.set("display_arrange.pending_seconds", pendingSeconds)
 end
 
 -- ---------------------------------------------------------------------
@@ -766,16 +865,32 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
   if op == "set_primary" and type(cmd.name) == "string" then
     if cmd.name ~= primary then
       armConfirm()
+      local previousPrimary = primary
       -- The new primary has no direction, but keep any mode/scale/transform rules for it.
       local existing = rules[cmd.name] or {}
+      local previousDirection = existing.direction
       if existing.mode ~= nil or existing.scale ~= nil or existing.transform ~= nil then
         rules[cmd.name] = { mode = existing.mode, scale = existing.scale, transform = existing.transform }
       else
         rules[cmd.name] = nil
       end
+      -- Preserve the visible relationship when primary changes. If the new
+      -- primary was above the old one, the old primary is now below it, etc.
+      if previousPrimary ~= nil and previousDirection ~= nil then
+        local oldRule = rules[previousPrimary] or {}
+        rules[previousPrimary] = {
+          direction = OPPOSITE_DIRECTION[previousDirection],
+          mode = oldRule.mode,
+          scale = oldRule.scale,
+          transform = oldRule.transform,
+        }
+      end
       primary = cmd.name
       saveData()
-      applyLayout()
+      -- Changing the primary only changes output positions. Re-sending mode,
+      -- scale, transform, and "output on" commands here made this action race
+      -- with its own position commands and sometimes appear delayed.
+      applyLayout(false)
     end
   elseif op == "set_direction" and type(cmd.name) == "string" and type(cmd.direction) == "string" then
     armConfirm()
@@ -783,7 +898,7 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
     local existing = rules[cmd.name] or {}
     rules[cmd.name] = { direction = cmd.direction, mode = existing.mode, scale = existing.scale, transform = existing.transform }
     saveData()
-    applyLayout()
+    applyLayout(false)
   elseif op == "set_mode" and type(cmd.name) == "string" and type(cmd.width) == "number" then
     armConfirm()
     local existing = rules[cmd.name] or {}
@@ -818,11 +933,16 @@ noctalia.state.watch("display_arrange.cmd", function(cmd)
     rules[cmd.name] = nil
     saveData()
     fetchOutputs(publish)
-  elseif op == "confirm_layout" then
+  elseif op == "notification_action" and cmd.action == "keep" then
+    noctalia.log("DisplayArrange: keeping display changes")
     clearConfirm()
     fetchOutputs(publish)
-  elseif op == "revert_layout" then
-    revertPending()
+  elseif op == "notification_action" and cmd.action == "revert" then
+    noctalia.log("DisplayArrange: reverting display changes on request")
+    revertPending(false)
+  elseif op == "notification_action" and cmd.action == "timeout" then
+    noctalia.log("DisplayArrange: reverting unconfirmed display changes")
+    revertPending(true)
   elseif op == "refresh" then
     fetchOutputs(publish)
   end
@@ -831,13 +951,15 @@ end)
 
 function update()
   if pendingConfirm ~= nil and noctalia.nowMs() >= pendingConfirm.deadlineMs then
-    revertPending()
+    revertPending(true)
     return
   end
   fetchOutputs(function(list)
     local connectedKey = ""
     for _, o in ipairs(list) do
-      connectedKey = connectedKey .. o.name .. ";"
+      -- Treat an enabled/disabled transition like a hotplug. This is what
+      -- lets a remembered direction apply after a monitor becomes ready.
+      connectedKey = connectedKey .. o.name .. ":" .. tostring(o.enabled) .. ";"
     end
     if connectedKey ~= lastConnectedKey then
       local autoReapply = noctalia.getConfig("auto_reapply")

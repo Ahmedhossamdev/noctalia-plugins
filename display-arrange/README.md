@@ -25,10 +25,14 @@ API) on [niri](https://github.com/YaLTeR/niri) or [Hyprland](https://hyprland.or
   - **Display mode** — Extend / PC screen only / Second screen only
     (Duplicate/mirror is shown but disabled: neither compositor supports
     enabling mirroring at runtime — use your compositor config for that).
-- The layout is **re-applied automatically** whenever the set of connected
-  displays changes (e.g. plugging in a monitor), and once on plugin/service
-  startup — so your arrangement survives reconnects and shell restarts
-  without needing to touch your compositor's config file.
+  - **Safe confirmation** — each display change opens a desktop notification
+    with **Keep** and **Revert** buttons. Related changes made while that
+    notification is open are confirmed together. If neither action is selected
+    within 30 seconds, the plugin restores the previous layout automatically.
+- The layout is **re-applied automatically** whenever the connected-display
+  set or enabled state changes (for example, when reconnecting a monitor), and
+  once on plugin/service startup — so your arrangement survives reconnects and
+  shell restarts without needing to touch your compositor's config file.
 
 ## Requirements
 
@@ -46,6 +50,8 @@ API) on [niri](https://github.com/YaLTeR/niri) or [Hyprland](https://hyprland.or
     [Monitors](https://wiki.hypr.land/Configuring/Basics/Monitors/).
   - Anything else: the panel shows "No connected displays found" and all
     IPC calls become no-ops.
+- `notify-send` (from libnotify) — sends the Keep/Revert desktop notification
+  used to safely confirm display changes.
 
 ## Installation
 
