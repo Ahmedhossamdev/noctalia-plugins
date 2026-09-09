@@ -12,7 +12,8 @@ local rows = {}
 local comparisons = {}
 local deviceTz = ""
 local changingDeviceTz = false
-local barTz = ""
+local DEVICE_BAR_KEY = "__device__"
+local barTzs = { DEVICE_BAR_KEY }
 local allZones = {}
 local allZonesLoaded = false
 
@@ -59,6 +60,97 @@ local function diffLabel(offsetMinutes, deviceOffsetMinutes)
     return noctalia.tr("row.same-time")
   end
   return (diff > 0 and "+" or "") .. tostring(diff) .. "h"
+end
+
+local function barZoneSelected(key)
+  for _, selected in ipairs(barTzs) do
+    if selected == key then return true end
+  end
+  return false
+end
+
+local function daysBeforeYear(year)
+  local previous = year - 1
+  return 365 * previous
+    + math.floor(previous / 4)
+    - math.floor(previous / 100)
+    + math.floor(previous / 400)
+end
+
+local function localDateInfo(zone)
+  local raw = noctalia.formatTime("%Y|%j|%H", nil, zone)
+  local year, day, hour = raw:match("(%d+)|(%d+)|(%d+)")
+  if year == nil then return nil end
+  return {
+    ordinal = daysBeforeYear(tonumber(year)) + tonumber(day),
+    hour = tonumber(hour),
+  }
+end
+
+local function offsetDescription(offsetMinutes, deviceOffsetMinutes)
+  if offsetMinutes == nil or deviceOffsetMinutes == nil then return nil end
+  local difference = offsetMinutes - deviceOffsetMinutes
+  if difference == 0 then return noctalia.tr("relative.same-time") end
+  local absolute = math.abs(difference)
+  local hours = math.floor(absolute / 60)
+  local minutes = absolute % 60
+  local amount
+  if hours == 0 then
+    amount = tostring(minutes) .. "m"
+  elseif minutes == 0 then
+    amount = tostring(hours) .. "h"
+  else
+    amount = tostring(hours) .. "h " .. tostring(minutes) .. "m"
+  end
+  return noctalia.tr(difference > 0 and "relative.ahead" or "relative.behind", { offset = amount })
+end
+
+local function relativeDescriptions(row, deviceRow, workStart, workEnd)
+  if noctalia.getConfig("show_relative_time") == false then
+    local fallback = row.isDevice and "" or diffLabel(row.offsetMinutes, deviceRow and deviceRow.offsetMinutes or nil)
+    return fallback ~= "" and { fallback } or {}
+  end
+
+  local parts = {}
+  if not row.isDevice then
+    local offset = offsetDescription(row.offsetMinutes, deviceRow and deviceRow.offsetMinutes or nil)
+    if offset ~= nil then table.insert(parts, offset) end
+  end
+
+  local here = localDateInfo(row.tz)
+  local device = deviceRow and localDateInfo(deviceRow.tz) or nil
+  if here ~= nil and device ~= nil then
+    local dayDifference = here.ordinal - device.ordinal
+    if dayDifference ~= 0 then
+      local day
+      if dayDifference == -1 then
+        day = noctalia.tr("relative.yesterday")
+      elseif dayDifference == 1 then
+        day = noctalia.tr("relative.tomorrow")
+      else
+        day = noctalia.tr("relative.day-offset", { days = (dayDifference > 0 and "+" or "") .. tostring(dayDifference) })
+      end
+      local period
+      if here.hour < 5 then
+        period = noctalia.tr("relative.night")
+      elseif here.hour < 12 then
+        period = noctalia.tr("relative.morning")
+      elseif here.hour < 17 then
+        period = noctalia.tr("relative.afternoon")
+      elseif here.hour < 21 then
+        period = noctalia.tr("relative.evening")
+      else
+        period = noctalia.tr("relative.night")
+      end
+      table.insert(parts, day .. " " .. period)
+    end
+    table.insert(parts, noctalia.tr(
+      here.hour >= workStart and here.hour < workEnd
+        and "relative.inside-work-hours"
+        or "relative.outside-work-hours"
+    ))
+  end
+  return parts
 end
 
 local function flooredHourEpoch()
@@ -129,7 +221,7 @@ end
 -- row was not reliably claiming its full share, leaving a dead gap before
 -- the action buttons. An explicit width, divided evenly among however many
 -- columns are configured, is deterministic instead.
-local STRIP_WIDTH = 340
+local STRIP_WIDTH = 320
 local CELL_GAP = 1
 
 local function hourStrip(zone, hoursBefore, hoursAfter, use24h, highlightWork, workStart, workEnd)
@@ -167,17 +259,57 @@ local function hourStrip(zone, hoursBefore, hoursAfter, use24h, highlightWork, w
   return ui.row({ width = STRIP_WIDTH, gap = CELL_GAP }, cells)
 end
 
+local ACTION_BUTTON_SIZE = 28
+
 local function rowActions(row, isDeviceRow)
-  local starSelected = (isDeviceRow and barTz == "") or (not isDeviceRow and barTz == row.tz)
+  if not isDeviceRow and pendingDelete == row.tz then
+    return {
+      ui.button({
+        glyph = "check",
+        glyphSize = 14,
+        variant = "destructive",
+        width = ACTION_BUTTON_SIZE,
+        height = ACTION_BUTTON_SIZE,
+        paddingH = 0,
+        paddingV = 0,
+        tooltip = noctalia.tr("row.confirm-remove"),
+        onClick = function()
+          noctalia.state.set("timezone_hub.cmd", { op = "remove", tz = row.tz })
+          pendingDelete = nil
+        end,
+      }),
+      ui.button({
+        glyph = "close",
+        glyphSize = 14,
+        variant = "ghost",
+        width = ACTION_BUTTON_SIZE,
+        height = ACTION_BUTTON_SIZE,
+        paddingH = 0,
+        paddingV = 0,
+        tooltip = noctalia.tr("row.cancel-remove"),
+        onClick = function()
+          pendingDelete = nil
+          render()
+        end,
+      }),
+    }
+  end
+
+  local barKey = isDeviceRow and DEVICE_BAR_KEY or row.tz
+  local starSelected = barZoneSelected(barKey)
   local actions = {
     ui.button({
-      glyph = "star",
+      glyph = starSelected and "eye" or "eye-off",
+      glyphSize = 14,
       variant = "ghost",
-      controlSize = "sm",
+      width = ACTION_BUTTON_SIZE,
+      height = ACTION_BUTTON_SIZE,
+      paddingH = 0,
+      paddingV = 0,
       selected = starSelected,
-      tooltip = noctalia.tr("row.show-in-bar"),
+      tooltip = noctalia.tr(starSelected and "row.hide-from-bar" or "row.show-in-bar"),
       onClick = function()
-        noctalia.state.set("timezone_hub.cmd", { op = "set_bar_zone", tz = isDeviceRow and "" or row.tz })
+        noctalia.state.set("timezone_hub.cmd", { op = "toggle_bar_zone", tz = isDeviceRow and "" or row.tz })
       end,
     }),
   }
@@ -187,8 +319,12 @@ local function rowActions(row, isDeviceRow)
       actions,
       ui.button({
         glyph = "pin-filled",
+        glyphSize = 14,
         variant = "ghost",
-        controlSize = "sm",
+        width = ACTION_BUTTON_SIZE,
+        height = ACTION_BUTTON_SIZE,
+        paddingH = 0,
+        paddingV = 0,
         tooltip = noctalia.tr("row.set-device"),
         enabled = not changingDeviceTz,
         onClick = function()
@@ -197,46 +333,23 @@ local function rowActions(row, isDeviceRow)
       })
     )
 
-    if pendingDelete == row.tz then
-      table.insert(
-        actions,
-        ui.button({
-          glyph = "check",
-          variant = "destructive",
-          controlSize = "sm",
-          onClick = function()
-            noctalia.state.set("timezone_hub.cmd", { op = "remove", tz = row.tz })
-            pendingDelete = nil
-          end,
-        })
-      )
-      table.insert(
-        actions,
-        ui.button({
-          glyph = "close",
-          variant = "ghost",
-          controlSize = "sm",
-          onClick = function()
-            pendingDelete = nil
-            render()
-          end,
-        })
-      )
-    else
-      table.insert(
-        actions,
-        ui.button({
-          glyph = "trash",
-          variant = "ghost",
-          controlSize = "sm",
-          tooltip = noctalia.tr("row.remove"),
-          onClick = function()
-            pendingDelete = row.tz
-            render()
-          end,
-        })
-      )
-    end
+    table.insert(
+      actions,
+      ui.button({
+        glyph = "trash",
+        glyphSize = 14,
+        variant = "ghost",
+        width = ACTION_BUTTON_SIZE,
+        height = ACTION_BUTTON_SIZE,
+        paddingH = 0,
+        paddingV = 0,
+        tooltip = noctalia.tr("row.remove"),
+        onClick = function()
+          pendingDelete = row.tz
+          render()
+        end,
+      })
+    )
   end
 
   return actions
@@ -247,7 +360,10 @@ end
 -- is shown, so the strip's flexGrow space is identical across rows and the
 -- hour columns line up between the device row and every comparison row.
 local GRIP_SLOT_WIDTH = 20
-local ACTIONS_SLOT_WIDTH = 104
+-- Three explicit 28px controls plus 8px inset on either side. Keeping the
+-- hitboxes fixed prevents the final action from painting beyond the card.
+local ACTIONS_SLOT_WIDTH = 100
+local SCROLLBAR_GUTTER = 16
 
 local function cityRow(row, isDeviceRow, hoursBefore, hoursAfter, use24h, highlightWork, workStart, workEnd)
   local gripSlot
@@ -270,24 +386,53 @@ local function cityRow(row, isDeviceRow, hoursBefore, hoursAfter, use24h, highli
     })
   end
 
-  local info = ui.column({ width = 118, gap = 1, justify = "start" }, {
+  local infoItems = {
     ui.label({ text = row.label, fontWeight = "bold", fontSize = 12, maxLines = 1 }),
     ui.label({ text = row.tz, fontSize = 9, color = "on_surface_variant", maxLines = 1 }),
     ui.row({ gap = 4, align = "center", justify = "start" }, {
       ui.label({ text = row.timeText or "--:--", fontWeight = "bold", fontSize = 14, color = isDeviceRow and "primary" or "on_surface" }),
       ui.label({ text = row.abbrev or "", fontSize = 9, color = "on_surface_variant" }),
     }),
-    ui.label({
-      text = isDeviceRow and "" or diffLabel(row.offsetMinutes, rows[1] and rows[1].offsetMinutes or nil),
+  }
+  if noctalia.getConfig("show_date_in_panel") ~= false
+    and row.dateText and row.dateText ~= ""
+  then
+    table.insert(infoItems, ui.label({
+      text = row.dateText,
+      fontSize = 9,
+      color = "on_surface_variant",
+      maxLines = 1,
+    }))
+  end
+  if row.sunriseText and row.sunsetText then
+    table.insert(infoItems, ui.row({ gap = 3, align = "center", justify = "start" }, {
+      ui.glyph({ name = "sunrise", size = 10, color = "on_surface_variant" }),
+      ui.label({ text = row.sunriseText, fontSize = 9, color = "on_surface_variant" }),
+      ui.glyph({ name = "sunset", size = 10, color = "on_surface_variant" }),
+      ui.label({ text = row.sunsetText, fontSize = 9, color = "on_surface_variant" }),
+    }))
+  end
+  local relativeLines = relativeDescriptions(row, rows[1], workStart, workEnd)
+  for _, relative in ipairs(relativeLines) do
+    table.insert(infoItems, ui.label({
+      text = relative,
       fontSize = 9,
       color = "primary",
-    }),
-  })
+      maxLines = 1,
+    }))
+  end
+  local info = ui.column({ width = 132, gap = 1, justify = "start" }, infoItems)
 
   local strip = hourStrip(row.tz, hoursBefore, hoursAfter, use24h, highlightWork, workStart, workEnd)
 
   local actionsSlot = ui.row(
-    { width = ACTIONS_SLOT_WIDTH, gap = 2, align = "center", justify = "end" },
+    {
+      width = ACTIONS_SLOT_WIDTH,
+      gap = 0,
+      paddingH = 8,
+      align = "center",
+      justify = "end",
+    },
     rowActions(row, isDeviceRow)
   )
 
@@ -354,6 +499,15 @@ local function listView()
             openPicker("add")
           end,
         }),
+        ui.button({
+          glyph = "settings",
+          variant = "ghost",
+          controlSize = "sm",
+          tooltip = noctalia.tr("panel.open-settings"),
+          onClick = function()
+            noctalia.openSettings()
+          end,
+        }),
         ui.button({ glyph = "close", variant = "ghost", controlSize = "sm", onClick = function()
           panel.close()
         end }),
@@ -402,7 +556,15 @@ local function listView()
   )
 
   if rows[1] ~= nil then
-    table.insert(body, cityRow(rows[1], true, hoursBefore, hoursAfter, use24h, highlightWork, workStart, workEnd))
+    -- Comparison rows live in a scroll viewport, which reserves space for its
+    -- scrollbar. Give the fixed device row the same right gutter so both card
+    -- widths and every fixed-width child column line up exactly.
+    table.insert(body, ui.column({
+      paddingRight = SCROLLBAR_GUTTER,
+      align = "stretch",
+    }, {
+      cityRow(rows[1], true, hoursBefore, hoursAfter, use24h, highlightWork, workStart, workEnd),
+    }))
   end
 
   local list = {}
@@ -424,7 +586,13 @@ local function listView()
       color = "on_surface_variant",
     }))
   else
-    table.insert(body, ui.scroll({ flexGrow = 1, gap = 4, align = "stretch", justify = "start" }, list))
+    table.insert(body, ui.scroll({
+      flexGrow = 1,
+      gap = 4,
+      padding = 0,
+      align = "stretch",
+      justify = "start",
+    }, list))
   end
 
   return ui.column({ flexGrow = 1, gap = 6, padding = 8, justify = "start" }, body)
@@ -581,8 +749,8 @@ noctalia.state.watch("timezone_hub.changing_device_tz", function(value)
   render()
 end)
 
-noctalia.state.watch("timezone_hub.bar_tz", function(value)
-  barTz = type(value) == "string" and value or ""
+noctalia.state.watch("timezone_hub.bar_tzs", function(value)
+  barTzs = type(value) == "table" and value or { DEVICE_BAR_KEY }
   render()
 end)
 

@@ -1,18 +1,21 @@
 --!nonstrict
 -- Timezone Hub service — owns the device timezone, the comparison-city
--- list, and the bar-widget zone choice. Publishes computed rows every
+-- list, and the bar-widget zone choices. Publishes computed rows every
 -- second so the bar widget and panel stay thin clients of this state.
 --
--- Persistence: pluginDataDir()/data.json -> { comparisons = {...}, barTz = "" }
+-- Persistence: pluginDataDir()/data.json ->
+--   { comparisons = {...}, barTzs = { "__device__", "Area/City", ... } }
 -- State:
 --   timezone_hub.device_tz          -> string
 --   timezone_hub.changing_device_tz -> bool
 --   timezone_hub.rows               -> { { key, label, tz, isDevice, index,
---                                          timeText, offsetMinutes, abbrev }, ... }
---   timezone_hub.bar_tz             -> string (mirrors comparisons[].tz, or "" for device)
+--                                          timeText, dateText, offsetMinutes,
+--                                          abbrev }, ... }
+--   timezone_hub.bar_tzs            -> up to three zone keys; "__device__" follows the device zone
 --   timezone_hub.all_zones          -> { "Area/City", ... }
 --   timezone_hub.all_zones_loaded   -> bool
--- Commands (timezone_hub.cmd): { op = "add"|"remove"|"reorder"|"set_device"|"set_bar_zone"|"load_zones", ... }
+-- Commands (timezone_hub.cmd):
+--   { op = "add"|"remove"|"reorder"|"set_device"|"toggle_bar_zone"|"load_zones", ... }
 
 noctalia.setUpdateInterval(1000)
 
@@ -34,7 +37,9 @@ local FALLBACK_ZONES = {
 local deviceTz = ""
 local changingDeviceTz = false
 local comparisons = {} -- ordered { { tz, label }, ... }
-local barTz = ""
+local DEVICE_BAR_KEY = "__device__"
+local MAX_BAR_ZONES = 3
+local barTzs = { DEVICE_BAR_KEY }
 local allZones = {}
 local allZonesLoaded = false
 local allZonesLoading = false
@@ -57,7 +62,7 @@ local function saveData()
   if path == nil then
     return
   end
-  local encoded = noctalia.json.encode({ comparisons = comparisons, barTz = barTz })
+  local encoded = noctalia.json.encode({ comparisons = comparisons, barTzs = barTzs })
   if encoded ~= nil then
     noctalia.writeFile(path, encoded)
   end
@@ -65,7 +70,7 @@ end
 
 local function loadData()
   comparisons = {}
-  barTz = ""
+  barTzs = { DEVICE_BAR_KEY }
   local path = dataPath()
   if path ~= nil then
     local raw = noctalia.readFile(path)
@@ -79,8 +84,20 @@ local function loadData()
             end
           end
         end
-        if type(decoded.barTz) == "string" then
-          barTz = decoded.barTz
+        if type(decoded.barTzs) == "table" then
+          local restored = {}
+          local seen = {}
+          for _, zone in ipairs(decoded.barTzs) do
+            if type(zone) == "string" and zone ~= "" and not seen[zone] and #restored < MAX_BAR_ZONES then
+              table.insert(restored, zone)
+              seen[zone] = true
+            end
+          end
+          if #restored > 0 then barTzs = restored end
+        elseif type(decoded.barTz) == "string" then
+          -- Migrate the v2.0 single-zone selection. An empty string used to
+          -- mean "follow the device timezone".
+          barTzs = { decoded.barTz == "" and DEVICE_BAR_KEY or decoded.barTz }
         end
       end
     end
@@ -134,11 +151,127 @@ local function timeText(zone)
   return hh .. ":" .. mm
 end
 
+local function clockTextFromHours(hours)
+  local totalMinutes = math.floor(hours * 60 + 0.5) % (24 * 60)
+  local hh = math.floor(totalMinutes / 60)
+  local mm = totalMinutes % 60
+  if noctalia.getConfig("time_format") == "12h" then
+    local h12 = hh % 12
+    if h12 == 0 then h12 = 12 end
+    return string.format("%d:%02d %s", h12, mm, hh < 12 and "AM" or "PM")
+  end
+  return string.format("%02d:%02d", hh, mm)
+end
+
+local function dateText(zone)
+  local style = noctalia.getConfig("date_format") or "weekday"
+  local format = "%a, %b %d"
+  if style == "short" then
+    format = "%b %d"
+  elseif style == "iso" then
+    format = "%Y-%m-%d"
+  end
+  return noctalia.formatTime(format, nil, zone)
+end
+
+-- ---------------------------------------------------------------------
+-- Sunrise/sunset (local calculation; no network)
+-- ---------------------------------------------------------------------
+local zoneCoordinates = {}
+
+local function decodeCoordinate(value, degreeDigits)
+  if type(value) ~= "string" or #value < degreeDigits + 3 then return nil end
+  local sign = value:sub(1, 1) == "-" and -1 or 1
+  local digits = value:sub(2)
+  local degrees = tonumber(digits:sub(1, degreeDigits))
+  local minutes = tonumber(digits:sub(degreeDigits + 1, degreeDigits + 2))
+  local seconds = #digits >= degreeDigits + 4 and tonumber(digits:sub(degreeDigits + 3, degreeDigits + 4)) or 0
+  if degrees == nil or minutes == nil or seconds == nil then return nil end
+  return sign * (degrees + minutes / 60 + seconds / 3600)
+end
+
+local function loadZoneCoordinates(path)
+  local raw = noctalia.readFile(path)
+  if type(raw) ~= "string" then return end
+  for line in raw:gmatch("[^\r\n]+") do
+    if line:sub(1, 1) ~= "#" then
+      local coordinate, zone = line:match("^[^\t]+\t([^\t]+)\t([^\t]+)")
+      if coordinate ~= nil and zone ~= nil and zoneCoordinates[zone] == nil then
+        local latitudePart, longitudePart = coordinate:match("^([%+%-]%d+)([%+%-]%d+)$")
+        local latitude = decodeCoordinate(latitudePart, 2)
+        local longitude = decodeCoordinate(longitudePart, 3)
+        if latitude ~= nil and longitude ~= nil then
+          zoneCoordinates[zone] = { latitude = latitude, longitude = longitude }
+        end
+      end
+    end
+  end
+end
+
+local function normalizeDegrees(value)
+  return ((value % 360) + 360) % 360
+end
+
+local function radians(value)
+  return value * math.pi / 180
+end
+
+local function degrees(value)
+  return value * 180 / math.pi
+end
+
+-- NOAA's sunrise equation, returning UTC decimal hours. The standard
+-- 90.833-degree zenith accounts for atmospheric refraction and the sun's
+-- apparent radius.
+local function sunUtcHour(dayOfYear, latitude, longitude, sunrise)
+  local longitudeHour = longitude / 15
+  local approximate = dayOfYear + ((sunrise and 6 or 18) - longitudeHour) / 24
+  local meanAnomaly = 0.9856 * approximate - 3.289
+  local trueLongitude = normalizeDegrees(
+    meanAnomaly
+      + 1.916 * math.sin(radians(meanAnomaly))
+      + 0.020 * math.sin(radians(2 * meanAnomaly))
+      + 282.634
+  )
+  local rightAscension = normalizeDegrees(degrees(math.atan(0.91764 * math.tan(radians(trueLongitude)))))
+  local longitudeQuadrant = math.floor(trueLongitude / 90) * 90
+  local ascensionQuadrant = math.floor(rightAscension / 90) * 90
+  rightAscension = (rightAscension + longitudeQuadrant - ascensionQuadrant) / 15
+
+  local sinDeclination = 0.39782 * math.sin(radians(trueLongitude))
+  local cosDeclination = math.cos(math.asin(sinDeclination))
+  local cosHour = (
+    math.cos(radians(90.833)) - sinDeclination * math.sin(radians(latitude))
+  ) / (cosDeclination * math.cos(radians(latitude)))
+  if cosHour < -1 or cosHour > 1 then return nil end
+
+  local hourAngle = degrees(math.acos(cosHour))
+  if sunrise then hourAngle = 360 - hourAngle end
+  hourAngle /= 15
+  local localMeanTime = hourAngle + rightAscension - 0.06571 * approximate - 6.622
+  return normalizeDegrees((localMeanTime - longitudeHour) * 15) / 15
+end
+
+local function sunTimes(zone, offsetMinutes)
+  if noctalia.getConfig("show_sun_times") ~= true then return nil, nil end
+  local coordinate = zoneCoordinates[zone]
+  if coordinate == nil or offsetMinutes == nil then return nil, nil end
+  local dayOfYear = tonumber(noctalia.formatTime("%j", nil, zone))
+  if dayOfYear == nil then return nil, nil end
+  local sunriseUtc = sunUtcHour(dayOfYear, coordinate.latitude, coordinate.longitude, true)
+  local sunsetUtc = sunUtcHour(dayOfYear, coordinate.latitude, coordinate.longitude, false)
+  if sunriseUtc == nil or sunsetUtc == nil then return nil, nil end
+  local offsetHours = offsetMinutes / 60
+  return clockTextFromHours(sunriseUtc + offsetHours), clockTextFromHours(sunsetUtc + offsetHours)
+end
+
 -- ---------------------------------------------------------------------
 -- Row computation + publish
 -- ---------------------------------------------------------------------
 local function computeRows()
   local rows = {}
+  local deviceOffset = deviceTz ~= "" and parseOffsetMinutes(noctalia.formatTime("%z", nil, deviceTz)) or nil
+  local deviceSunrise, deviceSunset = sunTimes(deviceTz, deviceOffset)
   table.insert(rows, {
     key = "__device__",
     label = noctalia.tr("device.label"),
@@ -146,12 +279,17 @@ local function computeRows()
     isDevice = true,
     index = -1,
     timeText = deviceTz ~= "" and timeText(deviceTz) or "--:--",
-    offsetMinutes = deviceTz ~= "" and parseOffsetMinutes(noctalia.formatTime("%z", nil, deviceTz)) or nil,
+    dateText = deviceTz ~= "" and dateText(deviceTz) or "",
+    offsetMinutes = deviceOffset,
     abbrev = deviceTz ~= "" and noctalia.formatTime("%Z", nil, deviceTz) or "",
+    sunriseText = deviceSunrise,
+    sunsetText = deviceSunset,
   })
 
   for i, entry in ipairs(comparisons) do
     if entry.tz ~= deviceTz then
+      local offset = parseOffsetMinutes(noctalia.formatTime("%z", nil, entry.tz))
+      local sunrise, sunset = sunTimes(entry.tz, offset)
       table.insert(rows, {
         key = entry.tz .. "#" .. i,
         label = entry.label or entry.tz,
@@ -159,8 +297,11 @@ local function computeRows()
         isDevice = false,
         index = i,
         timeText = timeText(entry.tz),
-        offsetMinutes = parseOffsetMinutes(noctalia.formatTime("%z", nil, entry.tz)),
+        dateText = dateText(entry.tz),
+        offsetMinutes = offset,
         abbrev = noctalia.formatTime("%Z", nil, entry.tz),
+        sunriseText = sunrise,
+        sunsetText = sunset,
       })
     end
   end
@@ -170,7 +311,7 @@ end
 local function publish()
   noctalia.state.set("timezone_hub.device_tz", deviceTz)
   noctalia.state.set("timezone_hub.changing_device_tz", changingDeviceTz)
-  noctalia.state.set("timezone_hub.bar_tz", barTz)
+  noctalia.state.set("timezone_hub.bar_tzs", barTzs)
   noctalia.state.set("timezone_hub.rows", computeRows())
   -- Raw ordered comparison list (distinct from `rows`, which hides an
   -- entry that currently matches the device zone) so the panel can index
@@ -228,8 +369,15 @@ local function setDeviceTimezone(tz)
       elseif oldDeviceTz ~= "" and indexOfComparison(oldDeviceTz) == nil then
         table.insert(comparisons, 1, { tz = oldDeviceTz, label = shortLabel(oldDeviceTz) })
       end
-      if barTz == tz then
-        barTz = ""
+      -- Keep both selected clocks when the device zone and a comparison zone
+      -- trade places. The special device key follows the promoted zone while
+      -- the old device zone becomes an ordinary comparison selection.
+      for i, selected in ipairs(barTzs) do
+        if selected == tz then
+          barTzs[i] = DEVICE_BAR_KEY
+        elseif selected == DEVICE_BAR_KEY and oldDeviceTz ~= "" then
+          barTzs[i] = oldDeviceTz
+        end
       end
       deviceTz = tz
       saveData()
@@ -296,9 +444,10 @@ local function removeComparison(tz)
     return false
   end
   table.remove(comparisons, idx)
-  if barTz == tz then
-    barTz = ""
+  for i = #barTzs, 1, -1 do
+    if barTzs[i] == tz then table.remove(barTzs, i) end
   end
+  if #barTzs == 0 then table.insert(barTzs, DEVICE_BAR_KEY) end
   saveData()
   publish()
   return true
@@ -322,8 +471,21 @@ local function reorderComparison(tz, index)
   return true
 end
 
-local function setBarZone(tz)
-  barTz = tz or ""
+local function toggleBarZone(tz)
+  local key = (tz == nil or tz == "") and DEVICE_BAR_KEY or tz
+  for i, selected in ipairs(barTzs) do
+    if selected == key then
+      if #barTzs > 1 then table.remove(barTzs, i) end
+      saveData()
+      publish()
+      return
+    end
+  end
+  if #barTzs >= MAX_BAR_ZONES then
+    noctalia.notifyError(noctalia.tr("toast.title"), noctalia.tr("toast.max-bar-zones"))
+    return
+  end
+  table.insert(barTzs, key)
   saveData()
   publish()
 end
@@ -351,8 +513,8 @@ noctalia.state.watch("timezone_hub.cmd", function(cmd)
     reorderComparison(cmd.tz, cmd.index)
   elseif op == "set_device" then
     setDeviceTimezone(cmd.tz)
-  elseif op == "set_bar_zone" then
-    setBarZone(cmd.tz)
+  elseif op == "toggle_bar_zone" or op == "set_bar_zone" then
+    toggleBarZone(cmd.tz)
   elseif op == "load_zones" then
     loadAllZones()
   end
@@ -388,6 +550,8 @@ function update()
   publish()
 end
 
+loadZoneCoordinates("/usr/share/zoneinfo/zone1970.tab")
+loadZoneCoordinates("/usr/share/zoneinfo/zone.tab")
 loadData()
 detectDeviceTimezone()
 publish()

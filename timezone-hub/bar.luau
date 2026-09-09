@@ -4,9 +4,11 @@
 -- abbreviation. Click opens the panel.
 
 local rows = {}
-local barTz = ""
+local DEVICE_BAR_KEY = "__device__"
+local barTzs = { DEVICE_BAR_KEY }
 
 local function findRow(tz)
+  if tz == DEVICE_BAR_KEY then return rows[1] end
   for _, row in ipairs(rows) do
     if row.tz == tz then
       return row
@@ -16,18 +18,35 @@ local function findRow(tz)
 end
 
 local function render()
-  local row = barTz ~= "" and findRow(barTz) or rows[1]
-  if row == nil then
+  local selectedRows = {}
+  for _, zone in ipairs(barTzs) do
+    local row = findRow(zone)
+    if row ~= nil then table.insert(selectedRows, row) end
+  end
+  if #selectedRows == 0 and rows[1] ~= nil then
+    table.insert(selectedRows, rows[1])
+  end
+  if #selectedRows == 0 then
     barWidget.setGlyph("world")
     barWidget.setText("--:--")
     return
   end
+
   barWidget.setGlyph("world")
-  local text = row.timeText or "--:--"
-  if row.abbrev and row.abbrev ~= "" then
-    text = text .. " " .. row.abbrev
+  local segments = {}
+  for _, row in ipairs(selectedRows) do
+    local label = row.tz and row.tz:match(".*/(.*)$") or nil
+    label = (label or row.label or "Time"):gsub("_", " ")
+    local segment = label
+    if noctalia.getConfig("show_date_in_bar") ~= false
+      and row.dateText and row.dateText ~= ""
+    then
+      segment = segment .. " " .. row.dateText
+    end
+    segment = segment .. " " .. (row.timeText or "--:--")
+    table.insert(segments, segment)
   end
-  barWidget.setText(text)
+  barWidget.setText(table.concat(segments, " · "))
 end
 
 function update()
@@ -43,8 +62,8 @@ noctalia.state.watch("timezone_hub.rows", function(value)
   render()
 end)
 
-noctalia.state.watch("timezone_hub.bar_tz", function(value)
-  barTz = type(value) == "string" and value or ""
+noctalia.state.watch("timezone_hub.bar_tzs", function(value)
+  barTzs = type(value) == "table" and value or { DEVICE_BAR_KEY }
   render()
 end)
 

@@ -3,13 +3,14 @@
 
 id          = "ahmedhossamdev/timezone-hub"
 name        = "Timezone Hub"
-version     = "2.0.0"
+version     = "2.1.0"
 plugin_api  = 24
 author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "world"
 description = "Change your device timezone and compare it against other cities, with live times and an hour-offset strip for each."
 tags        = ["clock", "time", "timezone", "utility"]
+dependencies = ["timedatectl", "pkexec"]
 
 [[widget]]
 id    = "bar"
@@ -36,6 +37,45 @@ default     = "24h"
 options     = [
   { value = "24h", label_key = "settings.format-24h" },
   { value = "12h", label_key = "settings.format-12h" },
+]
+
+[[setting]]
+key             = "show_date_in_bar"
+type            = "bool"
+label_key       = "settings.show-date-in-bar"
+description_key = "settings.show-date-in-bar-desc"
+default         = true
+
+[[setting]]
+key             = "show_date_in_panel"
+type            = "bool"
+label_key       = "settings.show-date-in-panel"
+description_key = "settings.show-date-in-panel-desc"
+default         = true
+
+[[setting]]
+key             = "show_relative_time"
+type            = "bool"
+label_key       = "settings.show-relative-time"
+description_key = "settings.show-relative-time-desc"
+default         = true
+
+[[setting]]
+key             = "show_sun_times"
+type            = "bool"
+label_key       = "settings.show-sun-times"
+description_key = "settings.show-sun-times-desc"
+default         = false
+
+[[setting]]
+key             = "date_format"
+type            = "select"
+label_key       = "settings.date-format"
+default         = "weekday"
+options         = [
+  { value = "weekday", label_key = "settings.date-format-weekday" },
+  { value = "short",   label_key = "settings.date-format-short" },
+  { value = "iso",     label_key = "settings.date-format-iso" },
 ]
 
 [[setting]]

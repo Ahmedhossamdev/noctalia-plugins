@@ -6,21 +6,29 @@ v5 (Luau plugin API).
 
 ## Features
 
-- **Bar widget** — your device's local time (with zone abbreviation, or a
-  chosen comparison city's time instead), click to open the panel.
+- **Bar widget** — your device's local date and time (with zone abbreviation,
+  or a chosen comparison city's date and time instead), click to open the
+  panel. The date can be hidden for a compact clock.
 - **Panel** — your device pinned as the first row, plus every city you add:
-  - live time, UTC offset, and delta vs your device ("+6h", "-9h30", …)
+  - live local date and time, UTC offset, and delta vs your device ("+6h",
+    "-9h30", …)
   - a compact hour-offset strip per row (current hour highlighted, work
     hours shaded — configurable range)
   - drag the grip to reorder comparison cities
 - **Change your device timezone** from a searchable list of every IANA zone
   `timedatectl` knows about, or promote any comparison city to be your
   device's timezone with one click (the pin icon on its row).
-- **Star a row** to pick which zone the bar widget mirrors (defaults to
-  your device).
-- Settings (Settings → Plugins → Timezone Hub): 12h/24h format, how many
-  hours to show before/after now in the strip, and the work-hour highlight
-  range.
+- **Use a row's eye button** to choose which zones appear in the bar (the
+  device is selected by default). Select up to three rows to show multiple
+  clocks together.
+- **Relative descriptions** explain whether each city is ahead or behind,
+  on another day, and currently inside your configured working hours.
+- **Optional sunrise and sunset** are calculated locally from the system
+  timezone database; no location service or network request is used.
+- Settings (Settings → Plugins → Timezone Hub): 12h/24h time, weekday/short/ISO
+  date format, separate date visibility for the bar and panel, relative-time
+  descriptions, sunrise/sunset, how many hours to show before/after now, and
+  the work-hour highlight range.
 
 ## Requirements
 
@@ -28,6 +36,8 @@ v5 (Luau plugin API).
 - `pkexec` (polkit) — used to authorize the actual timezone change, since
   that's a privileged, machine-wide setting. A polkit agent must be running
   for the auth prompt to appear (true by default on most desktop setups).
+- `/usr/share/zoneinfo/zone1970.tab` or `zone.tab` — optional system timezone
+  coordinate data used for local sunrise and sunset calculations.
 
 If you'd rather not get a password prompt every time, you can allow your own
 user to change the timezone without authentication by adding a polkit rule,
@@ -92,6 +102,9 @@ noctalia msg plugin ahmedhossamdev/timezone-hub:service all list
 - Comparison cities are stored under the plugin's data directory and
   survive plugin updates; scalar preferences (time format, hour window,
   work-hour range) live in the shell's own Settings → Plugins page.
+- Sunrise and sunset use the representative coordinates shipped for each IANA
+  timezone. Times can vary within a large timezone, and no value is shown when
+  the sun does not rise or set on that date near the poles.
 - This plugin previously targeted Noctalia's legacy v4 (QML-based) plugin
   format. It has been rewritten against the current v5 API
   (`plugin.toml` + Luau).
