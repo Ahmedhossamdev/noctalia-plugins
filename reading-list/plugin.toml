@@ -6,7 +6,7 @@ author      = "ahmedhossamdev"
 license     = "MIT"
 icon        = "bookmarks"
 description = "Save articles, books, and images locally with collections, reading progress, sharing, and Obsidian-friendly notes."
-tags        = ["bar", "panel", "service", "reading", "bookmarks", "productivity", "obsidian"]
+tags        = ["bar", "panel", "service", "productivity", "utility"]
 dependencies = ["xdg-open", "python3"]
 
 [[widget]]
