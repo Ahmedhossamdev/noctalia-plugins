@@ -34,3 +34,14 @@ license     = "MIT"
 icon        = "device-desktop"
 description = "Arrange connected displays relative to each other - left, right, above, below - with rotation, and keep the layout applied."
 tags        = ["display", "monitor", "niri", "system", "utility"]
+
+[[plugin]]
+id          = "ahmedhossamdev/reading-list"
+name        = "Reading List"
+version     = "2.0.0"
+plugin_api  = 26
+author      = "ahmedhossamdev"
+license     = "MIT"
+icon        = "bookmarks"
+description = "Save articles, books, and images locally with collections, reading progress, sharing, and Obsidian-friendly notes."
+tags        = ["bar", "panel", "service", "reading", "bookmarks", "productivity", "obsidian"]

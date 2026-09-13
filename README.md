@@ -23,6 +23,10 @@ Then go to **Available**, install a plugin, and enable it from **Installed**.
 - [sticky-notes](./sticky-notes) — colourful sticky notes from your bar,
   with per-note color selection, pin & drag-to-arrange, a privacy blur
   mode, and Markdown/plain-text/JSON persistence.
+- [reading-list](./reading-list) — save articles, books, and images with
+  website metadata, collections, progress tracking, import/export, sorting,
+  reports, a manual reading queue, and an Obsidian-friendly local Markdown
+  library.
 
 ## Structure
 
