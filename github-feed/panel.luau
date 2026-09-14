@@ -6,6 +6,8 @@
 local items = {}
 local watched = {}
 local hasAuth = false
+local meLogin = ""
+local meAvatar = ""
 local loading = false
 local fetchError = ""
 local updatedMs = 0
@@ -50,6 +52,25 @@ local function updatedLabel()
   return noctalia.tr("panel.updated-ago", { count = diff })
 end
 
+local function subtitle()
+  local updated = updatedLabel()
+  if meLogin ~= "" then
+    return "@" .. meLogin .. " · " .. updated
+  end
+  return updated
+end
+
+local function avatarControl(path, key, size, glyphName)
+  if path ~= "" and noctalia.fileExists(path) then
+    return ui.image({ key = key, path = path, width = size, height = size,
+      radius = math.floor(size / 2), fit = "cover" })
+  end
+  return ui.column({ width = size, height = size, align = "center", justify = "center",
+    fill = "surface_variant", radius = math.floor(size / 2) }, {
+    ui.glyph({ name = glyphName or "brand-github", size = math.floor(size / 2), color = "primary" }),
+  })
+end
+
 local function openUrl(url)
   if type(url) == "string" and url:match("^https://[^%s]+$") then
     noctalia.runAsync({ "xdg-open", url })
@@ -72,15 +93,18 @@ end
 local function eventCard(entry)
   return ui.column({
     key = "event-" .. tostring(entry.id),
-    gap = 3,
+    gap = 4,
     padding = 8,
     fill = "surface_variant/0.25",
     radius = 6,
   }, {
-    ui.row({ gap = 6, align = "center", justify = "start" }, {
-      ui.glyph({ name = entry.glyph or "brand-github", size = 14, color = "primary" }),
-      ui.label({ text = entry.actor or "", fontWeight = "bold", fontSize = 12, flexGrow = 1, maxLines = 1 }),
-      ui.label({ text = ago(entry.epoch), fontSize = 9, color = "on_surface_variant" }),
+    ui.row({ gap = 8, align = "center", justify = "start" }, {
+      avatarControl(entry.avatar or "", "avatar-" .. tostring(entry.id), 32, entry.glyph or "brand-github"),
+      ui.column({ gap = 0, justify = "start", flexGrow = 1 }, {
+        ui.label({ text = entry.actor or "", fontWeight = "bold", fontSize = 12, maxLines = 1 }),
+        ui.label({ text = ago(entry.epoch), fontSize = 9, color = "on_surface_variant" }),
+      }),
+      ui.glyph({ name = entry.glyph or "brand-github", size = 15, color = "primary" }),
     }),
     ui.label({ text = entry.summary or "", fontSize = 11, maxLines = 3 }),
     ui.row({ gap = 6, align = "center", justify = "start", onClick = function()
@@ -164,10 +188,10 @@ local function feedBody()
 
   table.insert(body, ui.row({ align = "center", justify = "space_between" }, {
     ui.row({ gap = 8, align = "center", justify = "start", flexGrow = 1 }, {
-      ui.glyph({ name = "brand-github", size = 20, color = "primary" }),
+      avatarControl(meAvatar, "me-avatar", 32, "brand-github"),
       ui.column({ gap = 0, justify = "start" }, {
         ui.label({ text = noctalia.tr("panel.title"), fontSize = 14, fontWeight = "bold" }),
-        ui.label({ text = updatedLabel(), fontSize = 10, color = "on_surface_variant" }),
+        ui.label({ text = subtitle(), fontSize = 10, color = "on_surface_variant" }),
       }),
     }),
     ui.row({ gap = 2, justify = "start" }, {
@@ -220,7 +244,7 @@ local function feedBody()
     table.insert(body, ui.column({ gap = 4, padding = 8, fill = "surface_variant/0.25", radius = 6 }, {
       ui.label({ text = noctalia.tr("panel.empty-title", "No feed yet"), fontWeight = "bold", fontSize = 12 }),
       ui.label({
-        text = noctalia.tr("panel.empty-hint", "Add your GitHub username + token in settings for your full homepage feed, or watch a user above."),
+        text = noctalia.tr("panel.empty-hint", "Log in with gh auth login (or set your username + token in settings) for your full homepage feed, or watch a user above."),
         fontSize = 10,
         color = "on_surface_variant",
         maxLines = 4,
@@ -281,6 +305,13 @@ end)
 
 noctalia.state.watch("github_feed.has_auth", function(value)
   hasAuth = value == true
+  render()
+end)
+
+noctalia.state.watch("github_feed.me", function(value)
+  local info = type(value) == "table" and value or {}
+  meLogin = type(info.login) == "string" and info.login or ""
+  meAvatar = type(info.avatar) == "string" and info.avatar or ""
   render()
 end)
 

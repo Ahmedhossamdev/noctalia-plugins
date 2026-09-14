@@ -5,16 +5,21 @@ releases, stars, and forks from people you follow, in the bar and a panel.
 
 ## Setup
 
-For the full homepage feed (everyone you follow, like github.com):
+Zero configuration if you use the GitHub CLI — the plugin signs in as
+whoever `gh` is logged in as and shows **your** homepage feed (everyone
+you follow, like github.com):
 
-1. Create a fine-grained personal access token at
-   <https://github.com/settings/tokens> (no extra permissions needed —
-   public activity is readable without scopes).
-2. In Noctalia → Plugins → GitHub Feed → Settings, set **GitHub username**
-   to your login and paste the token into **Personal access token**.
+```sh
+gh auth login
+```
 
-Without a token the plugin still works: add any public GitHub users from
-the panel and their public activity is shown instead.
+That's it. Your avatar appears in the panel header, and every event shows
+the actor's avatar (cached locally, downloaded once).
+
+To use a different account without touching `gh`, set **GitHub username**
+and **Personal access token** in Noctalia → Plugins → GitHub Feed →
+Settings (a fine-grained token with no extra permissions is enough).
+Settings always override the `gh` login.
 
 ## Usage
 
@@ -28,16 +33,15 @@ the panel and their public activity is shown instead.
 
 | Key                  | Type   | Default | Notes                                                        |
 | -------------------- | ------ | ------- | ------------------------------------------------------------ |
-| `github_username`    | string | `""`    | Your GitHub login.                                           |
-| `github_token`       | string | `""`    | Optional PAT; unlocks the homepage feed + higher rate limit. |
+| `github_username`    | string | `""`    | Override account; empty = whoever `gh` is logged in as.      |
+| `github_token`       | string | `""`    | Override token; empty = `gh auth token`.                    |
 | `refresh_interval`   | int    | `30`    | Auto-refresh period in minutes (5–240).                      |
 | `max_items`          | int    | `30`    | Maximum feed items kept (10–100).                            |
 | `show_count_in_bar`  | bool   | `true`  | Show the item count beside the bar icon.                     |
 
 ## Notes
 
-- Polls `GET /users/{you}/received_events` when authenticated (exactly what
+- Polls `GET /users/{you}/received_events` when signed in (exactly what
   github.com shows), otherwise `GET /users/{user}/events/public` per
-  watched user.
-- Unauthenticated requests share GitHub's 60/hour rate limit; a token
-  raises it to 5,000/hour.
+  watched user. Watching extra users from the panel always works and is
+  merged into your feed.

@@ -17,7 +17,7 @@
     "remove-user": "Stop watching {user}",
     "no-watchers": "Watch a GitHub user below to build your feed.",
     "empty-title": "No feed yet",
-    "empty-hint": "Add your GitHub username + token in settings for your full homepage feed, or watch a user above.",
+    "empty-hint": "Log in with gh auth login (or set your username + token in settings) for your full homepage feed, or watch a user above.",
     "no-events": "No activity yet — hit refresh.",
     "no-results": "No events match this filter.",
     "auto-refresh": "Auto-refreshes every {count} minutes"
@@ -34,9 +34,9 @@
   },
   "settings": {
     "github-username": "GitHub username",
-    "github-username-desc": "Your GitHub login. With a token, this loads your full homepage feed (everyone you follow). Without a token, your public events are shown.",
+    "github-username-desc": "Override for the device login. Leave empty to use whoever is signed in via gh auth login.",
     "github-token": "Personal access token (optional)",
-    "github-token-desc": "A fine-grained token with no extra permissions unlocks your homepage feed and raises the API rate limit. Leave empty for public activity only.",
+    "github-token-desc": "Override for the gh token. A fine-grained token with no extra permissions works. Leave empty to use gh.",
     "refresh-interval": "Refresh every (minutes)",
     "max-items": "Maximum feed items",
     "show-count-in-bar": "Show event count in bar",

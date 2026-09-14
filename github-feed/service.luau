@@ -1,20 +1,23 @@
 --!nonstrict
 -- GitHub Feed service — fetches the same activity you see on github.com.
 --
--- With a username + personal access token configured, it polls your
--- dashboard feed (users/{you}/received_events: everything from people you
--- follow). Watched users added from the panel are always polled via their
--- public events, so the plugin also works with no token at all.
+-- Zero configuration: it signs in as whoever the device's `gh` CLI is
+-- logged in as and polls your dashboard feed (users/{you}/received_events:
+-- everything from people you follow). Explicit username/token settings
+-- override the `gh` login when filled in. Watched users added from the
+-- panel are always polled via their public events and merged in.
 --
--- Persistence: pluginDataDir()/data.json -> { watched = { "torvalds", ... } }
+-- Persistence: pluginDataDir()/data.json ->
+--   { watched = { "torvalds", ... }, avatars = { "torvalds", ... } }
 -- State:
---   github_feed.items    -> { { id, type, glyph, actor, repo, summary, url,
---                               createdAt, epoch }, ... } newest first
+--   github_feed.items    -> { { id, type, glyph, actor, avatar, repo, summary,
+--                               url, createdAt, epoch }, ... } newest first
 --   github_feed.loading  -> bool
 --   github_feed.error    -> string
 --   github_feed.updated  -> number (epoch ms of last successful fetch, 0 = never)
 --   github_feed.watched  -> { "user", ... }
 --   github_feed.has_auth -> bool
+--   github_feed.me       -> { login, avatar } (device GitHub user via gh CLI)
 -- Commands (github_feed.cmd):
 --   { op = "refresh" } | { op = "add_user", user = "..." } |
 --   { op = "remove_user", user = "..." }
@@ -34,6 +37,25 @@ local pending = 0
 local succeeded = 0
 local bucket = {}
 
+-- Device GitHub identity, auto-detected via the `gh` CLI (manual settings
+-- always win when filled in).
+local ghUser = ""
+local ghToken = ""
+local ghDetecting = false
+local lastGhDetectMs = 0
+local GH_DETECT_RETRY_MS = 600000
+
+-- Avatar cache: pluginDataDir()/avatars/<login>.png, persisted across
+-- restarts so we only download each avatar once.
+local avatarsDir = nil
+local avatarDone = {}
+local avatarBusy = {}
+local avatarPending = 0
+local me = { login = "", avatar = "" }
+
+local publish -- forward declaration (defined in the fetching section)
+local refresh -- forward declaration (defined in the fetching section)
+
 -- ---------------------------------------------------------------------
 -- Config + persistence
 -- ---------------------------------------------------------------------
@@ -47,6 +69,19 @@ end
 
 local function cfgToken()
   return trim(noctalia.getConfig("github_token"))
+end
+
+-- Effective credentials: explicit settings first, device `gh` login second.
+local function effUsername()
+  local configured = cfgUsername()
+  if configured ~= "" then return configured end
+  return ghUser
+end
+
+local function effToken()
+  local configured = cfgToken()
+  if configured ~= "" then return configured end
+  return ghToken
 end
 
 local function cfgIntervalMs()
@@ -69,7 +104,9 @@ end
 local function saveData()
   local path = dataPath()
   if path == nil then return end
-  local encoded = noctalia.json.encode({ watched = watched })
+  local cached = {}
+  for login, _ in pairs(avatarDone) do table.insert(cached, login) end
+  local encoded = noctalia.json.encode({ watched = watched, avatars = cached })
   if encoded ~= nil then noctalia.writeFile(path, encoded) end
 end
 
@@ -101,13 +138,124 @@ local function loadData()
   local raw = noctalia.readFile(path)
   if raw == nil then return end
   local decoded = noctalia.json.decode(raw)
-  if type(decoded) ~= "table" or type(decoded.watched) ~= "table" then return end
-  for _, entry in ipairs(decoded.watched) do
-    local user = cleanUsername(entry)
-    if validUsername(user) and indexOfWatched(user) == nil and #watched < MAX_WATCHED then
-      table.insert(watched, user)
+  if type(decoded) ~= "table" then return end
+  if type(decoded.watched) == "table" then
+    for _, entry in ipairs(decoded.watched) do
+      local user = cleanUsername(entry)
+      if validUsername(user) and indexOfWatched(user) == nil and #watched < MAX_WATCHED then
+        table.insert(watched, user)
+      end
     end
   end
+  if type(decoded.avatars) == "table" then
+    for _, entry in ipairs(decoded.avatars) do
+      local user = cleanUsername(entry)
+      if validUsername(user) then avatarDone[user:lower()] = true end
+    end
+  end
+end
+
+-- ---------------------------------------------------------------------
+-- Device identity via `gh` + avatar cache
+-- ---------------------------------------------------------------------
+local function ensureAvatarsDir()
+  if avatarsDir ~= nil then return true end
+  local base = noctalia.pluginDataDir()
+  if base == nil then return false end
+  avatarsDir = base .. "/avatars"
+  local ok, _ = noctalia.mkdirAll(avatarsDir)
+  return ok ~= false
+end
+
+local function avatarFile(login)
+  if avatarsDir == nil or not validUsername(login) then return "" end
+  return avatarsDir .. "/" .. login:lower() .. ".png"
+end
+
+local function sizedAvatar(url)
+  if type(url) ~= "string" or url == "" then return "" end
+  if url:find("?", 1, true) ~= nil then return url .. "&s=64" end
+  return url .. "?s=64"
+end
+
+local function publishIfAvatarsSettled()
+  if avatarPending <= 0 then publish() end
+end
+
+local function downloadAvatar(login, url)
+  local key = login:lower()
+  local path = avatarFile(login)
+  if path == "" or url == "" or avatarBusy[key] then return end
+  avatarBusy[key] = true
+  avatarPending += 1
+  local started = noctalia.download(sizedAvatar(url), path, function(ok)
+    avatarBusy[key] = nil
+    avatarPending -= 1
+    if ok then
+      avatarDone[key] = true
+      saveData()
+      for _, entry in ipairs(items) do
+        if entry.actor:lower() == key then entry.avatar = path end
+      end
+      if me.login:lower() == key then me.avatar = path end
+    end
+    publishIfAvatarsSettled()
+  end)
+  if not started then
+    avatarBusy[key] = nil
+    avatarPending -= 1
+  end
+end
+
+-- Give every feed item (and the device user) its cached avatar, fetching
+-- whatever is missing. Publishes once the outstanding downloads settle so
+-- avatars pop in shortly after the text feed.
+local function ensureAvatars()
+  if not ensureAvatarsDir() then return end
+  for _, entry in ipairs(items) do
+    if entry.avatar == "" and validUsername(entry.actor) then
+      local key = entry.actor:lower()
+      if avatarDone[key] then
+        entry.avatar = avatarFile(entry.actor)
+      else
+        downloadAvatar(entry.actor, entry.avatarUrl)
+      end
+    end
+  end
+  if me.login ~= "" and me.avatar == "" then
+    local key = me.login:lower()
+    if avatarDone[key] then
+      me.avatar = avatarFile(me.login)
+    else
+      downloadAvatar(me.login, "https://github.com/" .. me.login .. ".png")
+    end
+  end
+  publishIfAvatarsSettled()
+end
+
+local function detectGh()
+  if ghDetecting then return end
+  ghDetecting = true
+  lastGhDetectMs = noctalia.nowMs()
+  local started = noctalia.runAsync({ "gh", "api", "user", "--jq", ".login" }, function(result)
+    ghDetecting = false
+    local login = cleanUsername(result.stdout or "")
+    if result.exitCode == 0 and validUsername(login) then
+      local changed = login:lower() ~= ghUser:lower()
+      ghUser = login
+      me.login = login
+      noctalia.runAsync({ "gh", "auth", "token" }, function(tokenResult)
+        local token = trim(tokenResult.stdout or "")
+        if tokenResult.exitCode == 0 and token ~= "" then ghToken = token end
+        ensureAvatars()
+        if changed then refresh(false) end
+        publish()
+      end)
+    else
+      publish()
+    end
+  end)
+  if not started then ghDetecting = false end
 end
 
 -- ---------------------------------------------------------------------
@@ -172,7 +320,9 @@ end
 local function normalizeEvent(raw)
   if type(raw) ~= "table" then return nil end
   local eventType = type(raw.type) == "string" and raw.type or "Event"
-  local actor = (type(raw.actor) == "table" and type(raw.actor.login) == "string") and raw.actor.login or ""
+  local actorTable = type(raw.actor) == "table" and raw.actor or {}
+  local actor = type(actorTable.login) == "string" and actorTable.login or ""
+  local avatarUrl = type(actorTable.avatar_url) == "string" and actorTable.avatar_url or ""
   local repo = (type(raw.repo) == "table" and type(raw.repo.name) == "string") and raw.repo.name or ""
   local createdAt = type(raw.created_at) == "string" and raw.created_at or ""
   local payload = type(raw.payload) == "table" and raw.payload or {}
@@ -261,6 +411,8 @@ local function normalizeEvent(raw)
     type = eventType,
     glyph = TYPE_GLYPHS[eventType] or "brand-github",
     actor = actor,
+    avatar = "",
+    avatarUrl = avatarUrl,
     repo = repo,
     summary = summary,
     url = url,
@@ -272,13 +424,15 @@ end
 -- ---------------------------------------------------------------------
 -- Fetching
 -- ---------------------------------------------------------------------
-local function publish()
+publish = function()
+  me.login = effUsername()
   noctalia.state.set("github_feed.items", items)
   noctalia.state.set("github_feed.loading", loading)
   noctalia.state.set("github_feed.error", lastError)
   noctalia.state.set("github_feed.updated", lastUpdatedMs)
   noctalia.state.set("github_feed.watched", watched)
-  noctalia.state.set("github_feed.has_auth", cfgToken() ~= "" and cfgUsername() ~= "")
+  noctalia.state.set("github_feed.has_auth", effToken() ~= "" and effUsername() ~= "")
+  noctalia.state.set("github_feed.me", me)
 end
 
 local function finishFetch()
@@ -306,6 +460,7 @@ local function finishFetch()
   end
   bucket = {}
   publish()
+  ensureAvatars()
 end
 
 local function fetchUrl(url, token)
@@ -351,10 +506,10 @@ local function fetchUrl(url, token)
   return true
 end
 
-local function refresh(manual)
+refresh = function(manual)
   if loading then return end
-  local username = cfgUsername()
-  local token = cfgToken()
+  local username = effUsername()
+  local token = effToken()
   local perPage = cfgMaxItems()
   if perPage > 100 then perPage = 100 end
 
@@ -465,16 +620,22 @@ function onIpc(event, payload)
 end
 
 function update()
-  local sig = cfgUsername() .. "|" .. cfgToken() .. "|" .. table.concat(watched, ",") .. "|" .. tostring(cfgMaxItems())
+  local now = noctalia.nowMs()
+  if ghUser == "" and not ghDetecting and now - lastGhDetectMs >= GH_DETECT_RETRY_MS then
+    detectGh()
+  end
+  local sig = effUsername() .. "|" .. effToken() .. "|" .. table.concat(watched, ",") .. "|" .. tostring(cfgMaxItems())
   if sig ~= lastSig then
     lastSig = sig
     lastFetchMs = 0
   end
-  if noctalia.nowMs() - lastFetchMs >= cfgIntervalMs() then
+  if now - lastFetchMs >= cfgIntervalMs() then
     refresh(false)
   end
 end
 
 loadData()
+ensureAvatarsDir()
 publish()
+detectGh()
 refresh(false)
