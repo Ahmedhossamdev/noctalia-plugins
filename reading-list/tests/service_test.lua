@@ -5,6 +5,8 @@ local watchers = {}
 local clock = 1789200000000
 local failRemovePath = nil
 local failNextItemWrite = false
+local writeTargets = {}
+local removeTargets = {}
 
 local function jsonEscape(value)
   return '"' .. value:gsub('\\', '\\\\'):gsub('"', '\\"'):gsub('\n', '\\n') .. '"'
@@ -76,6 +78,7 @@ noctalia = {
     return files[path]
   end,
   writeFile = function(path, contents)
+    table.insert(writeTargets, path)
     if failNextItemWrite and path:find("/Items/", 1, true) then
       failNextItemWrite = false
       return false, "forced write failure"
@@ -89,6 +92,7 @@ noctalia = {
     return true
   end,
   removeFile = function(path)
+    table.insert(removeTargets, path)
     if path == failRemovePath then return false, "forced delete failure" end
     files[path] = nil
     return true
@@ -129,9 +133,33 @@ local function assertEqual(actual, expected, message)
   end
 end
 
+files["/library/Items/evil.md"] = [[---
+reading_list: true
+id: ../../pwned
+title: Traversal fixture
+cover: /library/.assets/../../cover-victim.md
+---
+]]
+files["/library/.assets/../../cover-victim.md"] = "must survive"
+
 math.randomseed(42)
 dofile(servicePath)
 assertEqual(stateValues["reading_list.ready"], true, "service should initialize")
+
+local traversalFixture = assert(findByTitle("Traversal fixture"), "frontmatter item should load")
+assertEqual(traversalFixture.id, "evil", "unsafe frontmatter id should fall back to the safe filename")
+for _, path in ipairs(writeTargets) do
+  assert(path:find("../", 1, true) == nil, "item writes must stay inside the library: " .. path)
+end
+assert(files["/library/Items/../../pwned.md"] == nil, "unsafe frontmatter id must not become a write path")
+assert(files["/library/Items/evil.md"] ~= nil, "queue repair should use the safe filename-derived id")
+command({ op = "remove", id = traversalFixture.id })
+assert(files["/library/Items/evil.md"] == nil, "removal should use the safe filename-derived id")
+for _, path in ipairs(removeTargets) do
+  assert(path:find("../", 1, true) == nil, "item deletions must stay inside owned paths: " .. path)
+end
+assertEqual(files["/library/.assets/../../cover-victim.md"], "must survive",
+  "frontmatter asset paths must not delete files outside the assets folder")
 
 command({ op = "add", item = {
   title = "First article", url = "https://example.com/first", source = "Example",

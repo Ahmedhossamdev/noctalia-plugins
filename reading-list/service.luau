@@ -62,6 +62,15 @@ local function makeId()
   return tostring(math.floor(noctalia.nowMs())) .. tostring(math.random(1000, 9999))
 end
 
+local function validItemId(value)
+  return type(value) == "string" and value:match("^[%w_-]+$") ~= nil
+end
+
+local function itemPath(id)
+  if itemsDir == nil or not validItemId(id) then return nil end
+  return itemsDir .. "/" .. id .. ".md"
+end
+
 local function findItem(id)
   for _, item in ipairs(items) do
     if item.id == id then return item end
@@ -79,7 +88,7 @@ end
 local function publish()
   sortItems()
   if itemsDir ~= nil then
-    for _, item in ipairs(items) do item.notePath = itemsDir .. "/" .. item.id .. ".md" end
+    for _, item in ipairs(items) do item.notePath = itemPath(item.id) or "" end
   end
   noctalia.state.set("reading_list.items", items)
   noctalia.state.set("reading_list.ready", ready)
@@ -237,7 +246,8 @@ local function parseItem(raw, fallbackId)
   end
   if data.reading_list ~= true and data.id == nil then return nil end
   local id = trim(data.id)
-  if id == "" then id = fallbackId end
+  if not validItemId(id) then id = trim(fallbackId) end
+  if not validItemId(id) then return nil end
   local itemType = VALID_TYPES[data.type] and data.type or "article"
   local status = VALID_STATUS[data.status] and data.status or "unread"
   local topics = type(data.topics) == "table" and data.topics or {}
@@ -286,14 +296,14 @@ local function parseItem(raw, fallbackId)
   }
 end
 
-local function itemPath(id)
-  return itemsDir .. "/" .. id .. ".md"
-end
-
 local function saveItem(item)
   if itemsDir == nil or item == nil then return false end
   item.updatedAt = math.floor(noctalia.nowMs() / 1000)
   local path = itemPath(item.id)
+  if path == nil then
+    lastError = noctalia.tr("errors.save")
+    return false
+  end
   local temporary = path .. ".tmp"
   local ok, err = noctalia.writeFile(temporary, serializeItem(item))
   if ok then ok, err = noctalia.renameFile(temporary, path) end
@@ -349,10 +359,12 @@ local function loadItems()
 end
 
 local function deleteOwnedAsset(path)
-  if type(path) == "string" and assetsDir ~= nil
-      and path:sub(1, #assetsDir + 1) == assetsDir .. "/" then
-    noctalia.removeFile(path)
-  end
+  if type(path) ~= "string" or assetsDir == nil then return end
+  local prefix = assetsDir .. "/"
+  if path:sub(1, #prefix) ~= prefix then return end
+  local filename = path:sub(#prefix + 1)
+  if filename:match("^[%w_-]+%.[%a%d]+$") == nil then return end
+  noctalia.removeFile(path)
 end
 
 local function htmlDecode(value)
@@ -431,7 +443,7 @@ local function assetExtension(url, fallback)
 end
 
 local function downloadAsset(id, kind, url, callback)
-  if not validWebUrl(url) or assetsDir == nil then callback(""); return end
+  if not validItemId(id) or not validWebUrl(url) or assetsDir == nil then callback(""); return end
   local fallback = kind == "favicon" and ".ico" or ".img"
   local path = assetsDir .. "/" .. id .. "-" .. kind .. assetExtension(url, fallback)
   local started = noctalia.download(url, path, function(ok)
@@ -722,7 +734,12 @@ local function updateItem(data)
 end
 
 local function deleteItemFiles(item)
-  local ok, err = noctalia.removeFile(itemPath(item.id))
+  local path = itemPath(item.id)
+  if path == nil then
+    lastError = noctalia.tr("errors.delete")
+    return false
+  end
+  local ok, err = noctalia.removeFile(path)
   if not ok then
     lastError = err or noctalia.tr("errors.delete")
     return false
