@@ -27,6 +27,8 @@ Then go to **Available**, install a plugin, and enable it from **Installed**.
   website metadata, collections, progress tracking, import/export, sorting,
   reports, a manual reading queue, and an Obsidian-friendly local Markdown
   library.
+- [github-feed](./github-feed) — your GitHub homepage feed on the desktop:
+  pushes, pull requests, issues, releases, and stars, auto-refreshed.
 
 ## Structure
 

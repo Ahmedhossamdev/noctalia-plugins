@@ -45,3 +45,14 @@ license     = "MIT"
 icon        = "bookmarks"
 description = "Save articles, books, and images locally with collections, reading progress, sharing, and Obsidian-friendly notes."
 tags        = ["bar", "panel", "service", "productivity", "utility"]
+
+[[plugin]]
+id          = "ahmedhossamdev/github-feed"
+name        = "GitHub Feed"
+version     = "1.0.0"
+plugin_api  = 26
+author      = "ahmedhossamdev"
+license     = "MIT"
+icon        = "brand-github"
+description = "See your GitHub feed on your desktop - pushes, pull requests, issues, releases, and stars from people you follow."
+tags        = ["github", "feed", "developer", "utility"]
