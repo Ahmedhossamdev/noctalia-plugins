@@ -65,7 +65,9 @@ local function avatarControl(path, key, size, glyphName)
     return ui.image({ key = key, path = path, width = size, height = size,
       radius = math.floor(size / 2), fit = "cover" })
   end
-  return ui.column({ width = size, height = size, align = "center", justify = "center",
+  -- Same key as the image branch so the shell swaps the node in place
+  -- instead of treating it as a new row (which overlaps text mid-layout).
+  return ui.column({ key = key, width = size, height = size, align = "center", justify = "center",
     fill = "surface_variant", radius = math.floor(size / 2) }, {
     ui.glyph({ name = glyphName or "brand-github", size = math.floor(size / 2), color = "primary" }),
   })
@@ -283,9 +285,22 @@ function onOpen(_context)
   render()
 end
 
+local lastItemsSig = ""
+
 noctalia.state.watch("github_feed.items", function(value)
   items = type(value) == "table" and value or {}
-  render()
+  -- The service re-publishes unchanged items (loading flips, avatar cache
+  -- hits, minute ticks). Re-rendering identical content is what stacked
+  -- rows on top of each other mid-refresh, so skip it.
+  local parts = {}
+  for _, entry in ipairs(items) do
+    table.insert(parts, tostring(entry.id) .. "=" .. tostring(entry.avatar or ""))
+  end
+  local sig = #parts .. "|" .. table.concat(parts, "|")
+  if sig ~= lastItemsSig then
+    lastItemsSig = sig
+    render()
+  end
 end)
 
 noctalia.state.watch("github_feed.watched", function(value)
@@ -306,16 +321,25 @@ noctalia.state.watch("github_feed.me", function(value)
 end)
 
 noctalia.state.watch("github_feed.loading", function(value)
-  loading = value == true
-  render()
+  local isLoading = value == true
+  if isLoading ~= loading then
+    loading = isLoading
+    render()
+  end
 end)
 
 noctalia.state.watch("github_feed.error", function(value)
-  fetchError = type(value) == "string" and value or ""
-  render()
+  local message = type(value) == "string" and value or ""
+  if message ~= fetchError then
+    fetchError = message
+    render()
+  end
 end)
 
 noctalia.state.watch("github_feed.updated", function(value)
-  updatedMs = tonumber(value) or 0
-  render()
+  local stamp = tonumber(value) or 0
+  if stamp ~= updatedMs then
+    updatedMs = stamp
+    render()
+  end
 end)

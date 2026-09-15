@@ -214,15 +214,18 @@ local function downloadAvatar(login, url)
 end
 
 -- Give every feed item (and the device user) its cached avatar, fetching
--- whatever is missing. Publishes once the outstanding downloads settle so
--- avatars pop in shortly after the text feed.
+-- whatever is missing. Publishes only when an avatar actually lands, so a
+-- refresh settles in two paints (feed text, then avatars) instead of one
+-- render per download.
 local function ensureAvatars()
   if not ensureAvatarsDir() then return end
+  local changed = false
   for _, entry in ipairs(items) do
     if entry.avatar == "" and validUsername(entry.actor) then
       local key = entry.actor:lower()
       if avatarDone[key] then
         entry.avatar = avatarFile(entry.actor)
+        changed = true
       else
         downloadAvatar(entry.actor, entry.avatarUrl)
       end
@@ -232,11 +235,12 @@ local function ensureAvatars()
     local key = me.login:lower()
     if avatarDone[key] then
       me.avatar = avatarFile(me.login)
+      changed = true
     else
       downloadAvatar(me.login, "https://github.com/" .. me.login .. ".png")
     end
   end
-  publishIfAvatarsSettled()
+  if changed then publishIfAvatarsSettled() end
 end
 
 local function detectGh()
