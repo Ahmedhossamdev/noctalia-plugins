@@ -25,6 +25,8 @@
 noctalia.setUpdateInterval(60000)
 
 local MAX_WATCHED = 20
+-- Placeholder watch for fresh installs; removable from the panel.
+local DEFAULT_WATCHED = "Ahmedhossamdev"
 
 local items = {}
 local watched = {}
@@ -136,7 +138,11 @@ local function loadData()
   local path = dataPath()
   if path == nil then return end
   local raw = noctalia.readFile(path)
-  if raw == nil then return end
+  if raw == nil then
+    watched = { DEFAULT_WATCHED }
+    saveData()
+    return
+  end
   local decoded = noctalia.json.decode(raw)
   if type(decoded) ~= "table" then return end
   if type(decoded.watched) == "table" then

@@ -91,33 +91,60 @@ local function filteredItems()
 end
 
 local function eventCard(entry)
+  local context = entry.repo or ""
+  local when = ago(entry.epoch)
+  if when ~= "" then
+    context = context .. " · " .. when
+  end
   return ui.column({
     key = "event-" .. tostring(entry.id),
-    gap = 4,
-    padding = 8,
+    gap = 8,
+    padding = 12,
     fill = "surface_variant/0.25",
-    radius = 6,
+    radius = 10,
   }, {
-    ui.row({ gap = 8, align = "center", justify = "start" }, {
-      avatarControl(entry.avatar or "", "avatar-" .. tostring(entry.id), 32, entry.glyph or "brand-github"),
-      ui.column({ gap = 0, justify = "start", flexGrow = 1 }, {
-        ui.label({ text = entry.actor or "", fontWeight = "bold", fontSize = 12, maxLines = 1 }),
-        ui.label({ text = ago(entry.epoch), fontSize = 9, color = "on_surface_variant" }),
-      }),
-      ui.glyph({ name = entry.glyph or "brand-github", size = 15, color = "primary" }),
-    }),
-    ui.label({ text = entry.summary or "", fontSize = 11, maxLines = 3 }),
-    ui.row({ gap = 6, align = "center", justify = "start", onClick = function()
+    ui.row({ gap = 10, align = "center", justify = "start", onClick = function()
       openUrl(entry.url)
     end }, {
-      ui.glyph({ name = "bookmarks", size = 11, color = "primary" }),
-      ui.label({ text = entry.repo or "", fontSize = 10, color = "primary", flexGrow = 1, maxLines = 1 }),
-      ui.glyph({ name = "external-link", size = 11, color = "on_surface_variant" }),
+      avatarControl(entry.avatar or "", "avatar-" .. tostring(entry.id), 44, entry.glyph or "brand-github"),
+      ui.column({ gap = 2, justify = "start", flexGrow = 1 }, {
+        ui.label({ text = entry.actor or "", fontWeight = "bold", fontSize = 14, maxLines = 1 }),
+        ui.label({ text = context, fontSize = 11, color = "on_surface_variant", maxLines = 1 }),
+      }),
+      ui.glyph({ name = entry.glyph or "brand-github", size = 18, color = "primary" }),
     }),
+    ui.label({ text = entry.summary or "", fontSize = 13, maxLines = 4 }),
   })
 end
 
 local function watchedSection()
+  local addRow = ui.row({ gap = 6, align = "center", justify = "start" }, {
+    ui.input({
+      key = "add-user-" .. tostring(newUserKey),
+      value = newUser,
+      placeholder = noctalia.tr("panel.add-placeholder", "Watch a user… Ahmedhossamdev"),
+      submitOnEnter = true,
+      controlSize = "sm",
+      flexGrow = 1,
+      onChange = function(value)
+        newUser = value
+      end,
+      onSubmit = "onAddUserSubmit",
+    }),
+    ui.button({
+      glyph = "plus",
+      variant = "outline",
+      controlSize = "sm",
+      tooltip = noctalia.tr("panel.add", "Watch user"),
+      onClick = function()
+        noctalia.state.set("github_feed.cmd", { op = "add_user", user = newUser })
+        newUser = ""
+        newUserKey += 1
+        render()
+      end,
+    }),
+  })
+
   local chips = {}
   for _, user in ipairs(watched) do
     table.insert(chips, ui.button({
@@ -132,41 +159,12 @@ local function watchedSection()
       end,
     }))
   end
-  if #chips == 0 then
-    table.insert(chips, ui.label({
-      text = noctalia.tr("panel.no-watchers", "Watch a GitHub user below to build your feed."),
-      fontSize = 10,
-      color = "on_surface_variant",
-    }))
-  end
 
-  return ui.column({ gap = 4, justify = "start" }, {
-    ui.label({ text = noctalia.tr("panel.watching", "Watching"), fontSize = 11, fontWeight = "bold" }),
-    ui.row({ gap = 4, align = "center", justify = "start" }, {
-      ui.input({
-        key = "add-user-" .. tostring(newUserKey),
-        value = newUser,
-        placeholder = noctalia.tr("panel.add-placeholder", "octocat…"),
-        submitOnEnter = true,
-        flexGrow = 1,
-        onChange = function(value)
-          newUser = value
-        end,
-        onSubmit = "onAddUserSubmit",
-      }),
-      ui.button({
-        glyph = "plus",
-        variant = "outline",
-        controlSize = "sm",
-        tooltip = noctalia.tr("panel.add", "Watch user"),
-        onClick = function()
-          noctalia.state.set("github_feed.cmd", { op = "add_user", user = newUser })
-          newUser = ""
-          newUserKey += 1
-          render()
-        end,
-      }),
-    }),
+  if #chips == 0 then
+    return ui.column({ gap = 6, justify = "start" }, { addRow })
+  end
+  return ui.column({ gap = 6, justify = "start" }, {
+    addRow,
     ui.column({ gap = 4, justify = "start" }, chips),
   })
 end
@@ -187,11 +185,11 @@ local function feedBody()
   local body = {}
 
   table.insert(body, ui.row({ align = "center", justify = "space_between" }, {
-    ui.row({ gap = 8, align = "center", justify = "start", flexGrow = 1 }, {
-      avatarControl(meAvatar, "me-avatar", 32, "brand-github"),
-      ui.column({ gap = 0, justify = "start" }, {
-        ui.label({ text = noctalia.tr("panel.title"), fontSize = 14, fontWeight = "bold" }),
-        ui.label({ text = subtitle(), fontSize = 10, color = "on_surface_variant" }),
+    ui.row({ gap = 10, align = "center", justify = "start", flexGrow = 1 }, {
+      avatarControl(meAvatar, "me-avatar", 36, "brand-github"),
+      ui.column({ gap = 2, justify = "start" }, {
+        ui.label({ text = noctalia.tr("panel.title"), fontSize = 15, fontWeight = "bold" }),
+        ui.label({ text = subtitle(), fontSize = 11, color = "on_surface_variant" }),
       }),
     }),
     ui.row({ gap = 2, justify = "start" }, {
@@ -222,13 +220,13 @@ local function feedBody()
 
   table.insert(body, ui.separator({}))
   table.insert(body, watchedSection())
-  table.insert(body, ui.separator({}))
 
   table.insert(body, ui.input({
     key = "search-" .. tostring(searchKey),
     value = search,
     placeholder = noctalia.tr("panel.search-placeholder", "Filter by user, repo, or keyword…"),
     submitOnEnter = true,
+    controlSize = "sm",
     onChange = function(value)
       search = value
       render()
@@ -237,15 +235,15 @@ local function feedBody()
   }))
 
   if fetchError ~= "" then
-    table.insert(body, ui.label({ text = fetchError, fontSize = 10, color = "error" }))
+    table.insert(body, ui.label({ text = fetchError, fontSize = 11, color = "error" }))
   end
 
   if not hasAuth and #watched == 0 then
-    table.insert(body, ui.column({ gap = 4, padding = 8, fill = "surface_variant/0.25", radius = 6 }, {
-      ui.label({ text = noctalia.tr("panel.empty-title", "No feed yet"), fontWeight = "bold", fontSize = 12 }),
+    table.insert(body, ui.column({ gap = 6, padding = 12, fill = "surface_variant/0.25", radius = 10 }, {
+      ui.label({ text = noctalia.tr("panel.empty-title", "No feed yet"), fontWeight = "bold", fontSize = 13 }),
       ui.label({
         text = noctalia.tr("panel.empty-hint", "Log in with gh auth login (or set your username + token in settings) for your full homepage feed, or watch a user above."),
-        fontSize = 10,
+        fontSize = 11,
         color = "on_surface_variant",
         maxLines = 4,
       }),
@@ -255,9 +253,9 @@ local function feedBody()
     if #entries == 0 then
       table.insert(body, ui.label({
         text = #items == 0
-          and noctalia.tr("panel.no-events", "No activity yet — pull to refresh.")
+          and noctalia.tr("panel.no-events", "No activity yet — hit refresh.")
           or noctalia.tr("panel.no-results", "No events match this filter."),
-        fontSize = 11,
+        fontSize = 12,
         color = "on_surface_variant",
       }))
     else
@@ -265,19 +263,11 @@ local function feedBody()
       for _, entry in ipairs(entries) do
         table.insert(cards, eventCard(entry))
       end
-      table.insert(body, ui.scroll({ flexGrow = 1, gap = 6, align = "stretch", justify = "start" }, cards))
+      table.insert(body, ui.scroll({ flexGrow = 1, gap = 8, align = "stretch", justify = "start" }, cards))
     end
   end
 
-  local interval = noctalia.getConfig("refresh_interval") or 30
-  table.insert(body, ui.label({
-    text = noctalia.tr("panel.auto-refresh", { count = interval }),
-    fontSize = 9,
-    color = "on_surface_variant",
-    textAlign = "center",
-  }))
-
-  return ui.column({ flexGrow = 1, gap = 6, padding = 8, justify = "start" }, body)
+  return ui.column({ flexGrow = 1, gap = 8, padding = 10, justify = "start" }, body)
 end
 
 function render()
